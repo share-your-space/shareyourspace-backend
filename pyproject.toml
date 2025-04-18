@@ -1,0 +1,24 @@
+[tool.poetry]
+name = "shareyourspace-backend"
+version = "0.1.0"
+description = ""
+authors = ["Marcel Kueck <marcel@shareyourspace.app>"]
+readme = "README.md"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.12"
+fastapi = "^0.115.12"
+uvicorn = {extras = ["standard"], version = "^0.34.1"}
+pydantic-settings = "^2.8.1"
+python-dotenv = "^1.1.0"
+sqlalchemy = {extras = ["asyncio"], version = "^2.0.40"}
+alembic = "^1.15.2"
+asyncpg = "^0.30.0"
+passlib = {extras = ["bcrypt"], version = "^1.7.4"}
+python-jose = {extras = ["cryptography"], version = "^3.4.0"}
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
