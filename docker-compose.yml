@@ -1,0 +1,47 @@
+version: "3.8"
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount the app directory for live code changes during development
+      - ./app:/app/app
+      # Add other potential volume mounts if needed (e.g., scripts)
+      - ./scripts:/app/scripts
+      - ./main.py:/app/main.py
+      - ./alembic.ini:/app/alembic.ini
+      - ./alembic:/app/alembic
+    env_file:
+      - .env
+    depends_on:
+      - db
+    # Add command override if you want hot-reloading during development
+    # command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+  db:
+    image: postgres:latest
+    # Use pgvector image if you need vector capabilities out-of-the-box
+    # image: pgvector/pgvector:pg16
+    environment:
+      # These variables should match the ones used in your DATABASE_URL in .env
+      POSTGRES_USER: ${POSTGRES_USER} # Replace with actual user or reference .env
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD} # Replace with actual password or reference .env
+      POSTGRES_DB: ${POSTGRES_DB} # Replace with actual db name or reference .env
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # You can add init scripts here if needed, e.g., to create extensions
+      # - ./scripts/db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:

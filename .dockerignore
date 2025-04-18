@@ -1,0 +1,41 @@
+# Git files
+.git
+.gitignore
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# IDE and Tooling Cache
+.idea/
+.vscode/
+.mypy_cache/
+.pytest_cache/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Logs
+*.log
+
+# Environment variables file
+.env
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Test files (if tests are not run inside the container)
+tests/
+
+# Alembic versions (usually applied via command, not copied)
+# alembic/versions/* 
