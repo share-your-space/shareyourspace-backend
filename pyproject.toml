@@ -17,6 +17,7 @@ alembic = "^1.15.2"
 asyncpg = "^0.30.0"
 passlib = {extras = ["bcrypt"], version = "^1.7.4"}
 python-jose = {extras = ["cryptography"], version = "^3.4.0"}
+faker = "^37.1.0"
 
 
 [build-system]
