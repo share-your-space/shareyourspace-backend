@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str = Field(..., validation_alias='DATABASE_URL')
     SECRET_KEY: str = Field(..., validation_alias='SECRET_KEY')
     ALGORITHM: str = Field(..., validation_alias='ALGORITHM')
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(30, validation_alias='ACCESS_TOKEN_EXPIRE_MINUTES') # Default 30 minutes
 
     # Add other secrets/config variables here later as needed
     RESEND_API_KEY: str | None = Field(None, validation_alias='RESEND_API_KEY')

@@ -20,6 +20,7 @@ python-jose = {extras = ["cryptography"], version = "^3.4.0"}
 faker = "^37.1.0"
 pydantic = {extras = ["email"], version = "^2.11.3"}
 resend = "^2.7.0"
+python-multipart = "^0.0.20"
 
 
 [build-system]

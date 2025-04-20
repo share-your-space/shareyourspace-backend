@@ -74,3 +74,17 @@ async def update_user_internal(db: AsyncSession, *, db_obj: User, obj_in: UserUp
         await db.rollback()
         print(f"Database error updating user internal: {e}")
         raise 
+
+async def update_user_password(db: AsyncSession, *, user: User, new_password: str) -> User:
+    """Update a user's password."""
+    hashed_password = get_password_hash(new_password)
+    user.hashed_password = hashed_password
+    db.add(user)
+    try:
+        await db.commit()
+        await db.refresh(user)
+        return user
+    except SQLAlchemyError as e:
+        await db.rollback()
+        print(f"Database error updating user password: {e}")
+        raise 
