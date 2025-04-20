@@ -116,11 +116,16 @@ async def verify_email(
     if user.status == "PENDING_VERIFICATION":
         updated_user_data = user_schemas.UserUpdateInternal(status=next_status)
         await crud_user.update_user_internal(db=db, db_obj=user, obj_in=updated_user_data)
+        # Re-fetch the user to ensure we have the latest state including role after update
+        user = await crud_user.get_user_by_id(db=db, user_id=db_token.user_id)
+        if not user: # Should ideally not happen, but good practice to check
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found after status update.")
 
     # Delete the used token
     await crud_verification_token.delete_verification_token(db=db, token_obj=db_token)
 
-    return {"message": "Email verified successfully."}
+    # Return success message along with the user's role
+    return {"success": True, "message": "Email verified successfully!", "role": user.role}
 
 @router.post("/login")
 async def login_for_access_token(
