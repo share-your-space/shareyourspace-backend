@@ -1,50 +1,43 @@
-from fastapi import FastAPI, Depends
-from fastapi.middleware.cors import CORSMiddleware # Import CORS Middleware
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import text # Import text for raw SQL
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware # Import CORS middleware
+# Remove unused imports if AsyncSession/text/get_db are no longer needed directly here
+# from sqlalchemy.ext.asyncio import AsyncSession
+# from sqlalchemy import text
+# from app.db.session import get_db
 
-from app.db.session import get_db # Assuming get_db dependency is here
-from app.routers import auth # Import the new auth router
+from app.routers import auth, users # Import the routers
 
 # Define allowed origins (adjust for production later)
+# For development, allow the frontend origin
 origins = [
-    "http://localhost:3000", # Frontend dev server
-    # Add your deployed frontend URL here for production
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
 ]
 
-def create_app() -> FastAPI:
-    app = FastAPI(title="ShareYourSpace Backend")
+# Initialize FastAPI app instance
+app = FastAPI()
 
-    # Add CORS middleware
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=origins,
-        allow_credentials=True, # Allows cookies/auth headers
-        allow_methods=["*"],    # Allow all standard methods (GET, POST, etc.)
-        allow_headers=["*"],    # Allow all headers
-    )
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True, # Allow cookies
+    allow_methods=["*"],    # Allow all methods (GET, POST, etc.)
+    allow_headers=["*"],    # Allow all headers
+)
 
-    @app.get("/")
-    async def root():
-        return {"message": "Welcome to ShareYourSpace API"}
+# Include routers directly on the global app instance
+app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
+app.include_router(users.router, prefix="/api/users", tags=["users"])
 
-    @app.get("/health/db")
-    async def health_check_db(db: AsyncSession = Depends(get_db)):
-        try:
-            # Try to run a simple query
-            await db.execute(text("SELECT 1"))
-            return {"status": "OK", "message": "Database connection successful"}
-        except Exception as e:
-            # If query fails, return error status
-            # In production, you might want to log the error `e`
-            return {"status": "error", "message": f"Database connection failed: {str(e)}"}
+# Simple health check endpoint
+@app.get("/health")
+def read_root():
+    return {"status": "ok"}
 
-    # Include routers
-    app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
-    # Add other routers here (e.g., users) when created
-    # from .routers import users 
-    # app.include_router(users.router, prefix="/api/users", tags=["users"])
+# The create_app function is no longer needed for this structure
+# def create_app() -> FastAPI:
+#     ...
+#     return app
 
-    return app
-
-app = create_app() 
+# Uvicorn will run this 'app' instance based on Dockerfile CMD likely being 'uvicorn app.main:app ...'
