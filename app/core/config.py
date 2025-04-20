@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     APPLE_KEY_ID: str | None = Field(None, validation_alias='APPLE_KEY_ID')
     APPLE_PRIVATE_KEY: str | None = Field(None, validation_alias='APPLE_PRIVATE_KEY')
     GOOGLE_AI_API_KEY: str | None = Field(None, validation_alias='GOOGLE_AI_API_KEY')
+    FRONTEND_URL: str = Field("http://localhost:3000", validation_alias='FRONTEND_URL') # Default for local dev
 
     model_config = SettingsConfigDict(env_file='.env', extra='ignore')
 

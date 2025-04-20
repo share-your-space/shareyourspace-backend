@@ -3,8 +3,17 @@ from sqlalchemy.future import select
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.models.user import User
-from app.schemas.user import UserCreate
+from app.schemas.user import UserCreate, UserUpdateInternal
 from app.security import get_password_hash
+
+async def get_user_by_id(db: AsyncSession, *, user_id: int) -> User | None:
+    """Fetch a single user by ID."""
+    try:
+        result = await db.execute(select(User).filter(User.id == user_id))
+        return result.scalars().first()
+    except SQLAlchemyError as e:
+        print(f"Database error fetching user by ID: {e}")
+        return None
 
 async def get_user_by_email(db: AsyncSession, *, email: str) -> User | None:
     """Fetch a single user by email."""
@@ -50,3 +59,18 @@ async def create_user(db: AsyncSession, *, obj_in: UserCreate) -> User:
         # Handle potential database errors (log them, raise specific exceptions, etc.)
         print(f"Database error creating user: {e}")
         raise # Re-raise the exception for the router to handle 
+
+async def update_user_internal(db: AsyncSession, *, db_obj: User, obj_in: UserUpdateInternal) -> User:
+    """Update user fields internally (e.g., status)."""
+    update_data = obj_in.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(db_obj, field, value)
+    db.add(db_obj)
+    try:
+        await db.commit()
+        await db.refresh(db_obj)
+        return db_obj
+    except SQLAlchemyError as e:
+        await db.rollback()
+        print(f"Database error updating user internal: {e}")
+        raise 

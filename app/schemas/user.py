@@ -28,4 +28,15 @@ class User(UserBase):
         from_attributes=True # Allows reading data from ORM models
     )
 
+# Schema for internal updates (e.g., changing status)
+# Only include fields that can be updated internally
+class UserUpdateInternal(BaseModel):
+    status: Optional[str] = None
+    is_active: Optional[bool] = None
+    # Add other fields here if needed for internal updates
+
+    model_config = ConfigDict(
+        from_attributes=True
+    )
+
 # You can add more schemas here as needed, e.g., UserUpdate 

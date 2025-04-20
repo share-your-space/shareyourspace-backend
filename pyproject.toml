@@ -19,6 +19,7 @@ passlib = {extras = ["bcrypt"], version = "^1.7.4"}
 python-jose = {extras = ["cryptography"], version = "^3.4.0"}
 faker = "^37.1.0"
 pydantic = {extras = ["email"], version = "^2.11.3"}
+resend = "^2.7.0"
 
 
 [build-system]
