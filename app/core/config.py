@@ -1,5 +1,6 @@
+import os
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field
+from pydantic import Field, EmailStr, HttpUrl
 
 
 class Settings(BaseSettings):
@@ -23,6 +24,8 @@ class Settings(BaseSettings):
     APPLE_PRIVATE_KEY: str | None = Field(None, validation_alias='APPLE_PRIVATE_KEY')
     GOOGLE_AI_API_KEY: str | None = Field(None, validation_alias='GOOGLE_AI_API_KEY')
     FRONTEND_URL: str = Field("http://localhost:3000", validation_alias='FRONTEND_URL') # Default for local dev
+    GCS_BUCKET_NAME: str
+    TARGET_SERVICE_ACCOUNT_EMAIL: str | None = Field(None, validation_alias='TARGET_SERVICE_ACCOUNT_EMAIL')
 
     model_config = SettingsConfigDict(env_file='.env', extra='ignore')
 
