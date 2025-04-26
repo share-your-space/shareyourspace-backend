@@ -14,7 +14,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.db.session import AsyncSessionLocal, engine # Assuming engine might be needed for direct ops
 from app.models.user import User
 from app.models.organization import Company, Startup # Import Company and Startup
-from app.security import get_password_hash
+from app.utils.security_utils import get_password_hash
 
 # logging.basicConfig(level=logging.INFO) # Removed logging config
 # logger = logging.getLogger(__name__) # Removed logger instance

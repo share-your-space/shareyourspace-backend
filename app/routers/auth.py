@@ -23,6 +23,7 @@ from app.models.password_reset_token import PasswordResetToken
 from app.db.session import get_db
 from app.utils.email import send_email
 from app.core.config import settings
+from app.utils.security_utils import verify_password
 from app import security
 
 router = APIRouter()
@@ -136,7 +137,7 @@ async def login_for_access_token(
     user = await crud_user.get_user_by_email(db, email=form_data.username)
     
     # Check if user exists and password is correct
-    if not user or not security.verify_password(form_data.password, user.hashed_password):
+    if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",

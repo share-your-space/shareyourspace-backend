@@ -10,7 +10,7 @@ class UserBase(BaseModel):
 # Properties required for user creation via API
 class UserCreate(UserBase):
     password: str
-    role_type: str  # Expected: 'CORP_REP', 'STARTUP_REP', 'FREELANCER' from frontend
+    role: str  # Renamed from role_type. Expected: 'CORP_ADMIN', 'STARTUP_ADMIN', 'FREELANCER' etc.
     company_name: Optional[str] = None
     title: Optional[str] = None
 

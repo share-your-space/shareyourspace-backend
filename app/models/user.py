@@ -52,6 +52,14 @@ class User(Base):
         uselist=False
     )
 
+    # Relationship to the SpaceNode this user BELONGS TO
+    # Uses the space_id foreign key on this User model
+    space = relationship(
+        "SpaceNode", 
+        foreign_keys=[space_id],
+        back_populates="users"
+    )
+
     # Relationship to the Workstation this user is assigned to
     # Corresponds to `assigned_user = relationship("User", back_populates="assigned_workstation")` in Workstation
     assigned_workstation = relationship("Workstation", back_populates="assigned_user", uselist=False)

@@ -86,4 +86,34 @@ async def list_all_spaces(
     """List all spaces (paginated)."""
     # Use direct import path
     spaces = await crud_space.get_spaces(db, skip=skip, limit=limit)
-    return spaces 
+    return spaces
+
+@router.put("/users/{user_id}/assign-space", response_model=schemas.admin.UserAdminView, dependencies=[Depends(require_sys_admin)])
+async def assign_user_space(
+    user_id: int,
+    assignment: schemas.admin.UserAssignSpace,
+    db: AsyncSession = Depends(get_db)
+):
+    """Assigns or unassigns a user to a specific space node."""
+    try:
+        updated_user = await crud_user.assign_user_to_space(
+            db=db, user_id=user_id, space_id=assignment.space_id
+        )
+        if not updated_user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"User with ID {user_id} not found."
+            )
+        return updated_user
+    except ValueError as e:
+         # Handle case where space_id is provided but doesn't exist
+         raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        # Catch unexpected errors from CRUD
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An error occurred while assigning the user to the space."
+        ) 

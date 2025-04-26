@@ -27,6 +27,10 @@ class SpaceNode(Base):
     # Relationship to Workstations - One SpaceNode has many Workstations
     workstations = relationship("Workstation", back_populates="space_node", cascade="all, delete-orphan")
 
+    # Relationship to Users belonging to this SpaceNode
+    # Corresponds to `space = relationship(...)` in User model
+    users = relationship("User", back_populates="space", foreign_keys="[User.space_id]")
+
 class Workstation(Base):
     __tablename__ = 'workstations'
 

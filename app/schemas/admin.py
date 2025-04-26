@@ -6,6 +6,10 @@ from datetime import datetime
 from .user import User as UserSchema
 
 
+# Schema for assigning a user to a space
+class UserAssignSpace(BaseModel):
+    space_id: Optional[int] = None # Allow unassigning by passing null/None
+
 # Schema for creating a SpaceNode via API
 class SpaceCreate(BaseModel):
     name: str

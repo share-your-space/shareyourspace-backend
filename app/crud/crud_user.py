@@ -4,7 +4,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.models.user import User
 from app.schemas.user import UserCreate, UserUpdateInternal
-from app.security import get_password_hash, verify_password
+from app.utils.security_utils import get_password_hash, verify_password
 from typing import List, Optional
 
 async def get_user_by_id(db: AsyncSession, *, user_id: int) -> User | None:
@@ -107,3 +107,28 @@ async def activate_corporate_user(db: AsyncSession, *, user_id: int, space_id: O
         "space_id": space_id # Assign space if provided
     }
     return await update_user_internal(db, db_obj=user, obj_in=UserUpdateInternal(**update_data))
+
+async def assign_user_to_space(db: AsyncSession, *, user_id: int, space_id: Optional[int]) -> Optional[User]:
+    """Assigns or unassigns a user to a specific space."""
+    user = await get_user_by_id(db, user_id=user_id)
+    if not user:
+        return None # Or raise error
+    
+    # Check if space exists if assigning (space_id is not None)
+    if space_id is not None:
+        from .crud_space import get_space # Local import to avoid circular dependency issues
+        space = await get_space(db, space_id=space_id)
+        if not space:
+            # Raise a specific error or return None/False to indicate space not found
+            raise ValueError(f"Space with ID {space_id} not found.") 
+
+    user.space_id = space_id
+    db.add(user)
+    try:
+        await db.commit()
+        await db.refresh(user)
+        return user
+    except SQLAlchemyError as e:
+        await db.rollback()
+        print(f"Database error assigning user to space: {e}")
+        raise
