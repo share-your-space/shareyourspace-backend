@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, Integer, String, DateTime, func
+from sqlalchemy import Boolean, Column, Integer, String, DateTime, func, ForeignKey
 from sqlalchemy.orm import relationship
 
 from app.db.base_class import Base
@@ -19,9 +19,16 @@ class User(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
+    # Added ForeignKeys and Relationships
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=True)
+    startup_id = Column(Integer, ForeignKey("startups.id"), nullable=True)
+
+    company = relationship("Company", back_populates="members")
+    startup = relationship("Startup", back_populates="members")
+
     # One-to-one relationship to UserProfile
     profile = relationship("UserProfile", back_populates="user", uselist=False, cascade="all, delete-orphan")
 
     # Relationships for tokens (if they exist)
-    # verification_tokens = relationship("VerificationToken", back_populates="user")
-    # password_reset_tokens = relationship("PasswordResetToken", back_populates="user") 
+    verification_tokens = relationship("VerificationToken", back_populates="user")
+    password_reset_tokens = relationship("PasswordResetToken", back_populates="user") 

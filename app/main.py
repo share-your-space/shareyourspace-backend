@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware # Import CORS middleware
 # from sqlalchemy import text
 # from app.db.session import get_db
 
-from app.routers import auth, users # Import the routers
+from app.routers import auth, users, organizations # Import the routers
 
 # Define allowed origins (adjust for production later)
 # For development, allow the frontend origin
@@ -15,7 +15,11 @@ origins = [
 ]
 
 # Initialize FastAPI app instance
-app = FastAPI()
+app = FastAPI(
+    title="ShareYourSpace API",
+    description="API for ShareYourSpace platform.",
+    version="0.1.0"
+)
 
 # Add CORS middleware
 app.add_middleware(
@@ -29,6 +33,7 @@ app.add_middleware(
 # Include routers directly on the global app instance
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(users.router, prefix="/api/users", tags=["users"])
+app.include_router(organizations.router, prefix="/api/organizations", tags=["organizations"])
 
 # Simple health check endpoint
 @app.get("/health")

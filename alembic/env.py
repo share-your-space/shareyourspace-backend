@@ -3,6 +3,10 @@ import os
 import sys
 from logging.config import fileConfig
 
+# Explicitly load .env file before importing application modules
+from dotenv import load_dotenv
+load_dotenv()
+
 from sqlalchemy import pool
 # Use create_async_engine for async connection
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -13,10 +17,11 @@ from alembic import context
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 # Import application settings and Base model
+# Now settings should correctly load variables from the .env file
 from app.core.config import settings
 from app.db.base_class import Base
 # Import your models here so Base has them registered
-from app.models.user import User # Ensure User model is imported
+from app.models import * # Import all models from the models package
 # from app.models.item import Item # Example
 
 # this is the Alembic Config object, which provides
@@ -81,6 +86,10 @@ async def run_migrations_online() -> None:
     and associate a connection with the context.
 
     """
+    # --- Print the DB URL being used for debugging ---
+    # print(f"Attempting to connect to database: {db_url}") # Removed debug print
+    # -----------------------------------------------
+
     # Create an async engine using the DATABASE_URL from settings
     connectable = create_async_engine(
         db_url, # Use the db_url variable defined above
