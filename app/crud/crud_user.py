@@ -4,7 +4,8 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.models.user import User
 from app.schemas.user import UserCreate, UserUpdateInternal
-from app.security import get_password_hash
+from app.security import get_password_hash, verify_password
+from typing import List, Optional
 
 async def get_user_by_id(db: AsyncSession, *, user_id: int) -> User | None:
     """Fetch a single user by ID."""
@@ -29,24 +30,23 @@ async def create_user(db: AsyncSession, *, obj_in: UserCreate) -> User:
     """Create a new user."""
     hashed_password = get_password_hash(obj_in.password)
     
-    # Map frontend role_type to backend User.role
-    if obj_in.role_type == 'CORP_REP':
-        db_role = 'CORP_ADMIN'
-    elif obj_in.role_type == 'STARTUP_REP':
-        db_role = 'STARTUP_ADMIN'
-    else: # Default to FREELANCER
-        db_role = 'FREELANCER'
+    # Determine initial status based on role
+    initial_status = 'PENDING_VERIFICATION' # Default
+    if obj_in.role == 'FREELANCER':
+        initial_status = 'WAITLISTED' # As per ON-05 flow
+    elif obj_in.role == 'STARTUP_ADMIN':
+        initial_status = 'WAITLISTED' # As per ON-05 flow
+    elif obj_in.role == 'CORP_ADMIN': # Should be CORP_REPRESENTATIVE during signup
+        initial_status = 'PENDING_ONBOARDING' # As per ON-06 flow
 
     # Create the User model instance
     db_user = User(
         email=obj_in.email,
         full_name=obj_in.full_name,
         hashed_password=hashed_password,
-        role=db_role,
-        status='PENDING_VERIFICATION',  # Initial status
-        # company_name and title are not directly on User model based on schema read
-        # If they should be, update the User model
-        is_active=True # Or False until verified? Decide based on flow
+        role=obj_in.role,
+        status=initial_status, # Use determined status
+        is_active=False # Usually set to True after verification/activation
     )
     
     try:
@@ -88,3 +88,22 @@ async def update_user_password(db: AsyncSession, *, user: User, new_password: st
         await db.rollback()
         print(f"Database error updating user password: {e}")
         raise 
+
+async def get_users_by_status(db: AsyncSession, status: str) -> List[User]:
+    """Get a list of users filtered by their status."""
+    result = await db.execute(select(User).filter(User.status == status))
+    return result.scalars().all()
+
+async def activate_corporate_user(db: AsyncSession, *, user_id: int, space_id: Optional[int] = None) -> Optional[User]:
+    """Activates a user with PENDING_ONBOARDING status to CORP_ADMIN and ACTIVE."""
+    user = await get_user_by_id(db, user_id=user_id)
+    if not user or user.status != 'PENDING_ONBOARDING':
+        return None # Or raise an exception
+
+    update_data = {
+        "status": "ACTIVE",
+        "role": "CORP_ADMIN",
+        "is_active": True,
+        "space_id": space_id # Assign space if provided
+    }
+    return await update_user_internal(db, db_obj=user, obj_in=UserUpdateInternal(**update_data))

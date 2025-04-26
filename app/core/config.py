@@ -1,13 +1,16 @@
 import os
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field, EmailStr, HttpUrl
+from typing import List, Optional
 
 
 class Settings(BaseSettings):
+    PROJECT_NAME: str = "ShareYourSpace 2.0" # Added default project name
     DATABASE_URL: str = Field(..., validation_alias='DATABASE_URL')
     SECRET_KEY: str = Field(..., validation_alias='SECRET_KEY')
     ALGORITHM: str = Field(..., validation_alias='ALGORITHM')
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(30, validation_alias='ACCESS_TOKEN_EXPIRE_MINUTES') # Default 30 minutes
+    API_V1_STR: str = "/api"
 
     # Add other secrets/config variables here later as needed
     RESEND_API_KEY: str | None = Field(None, validation_alias='RESEND_API_KEY')
@@ -26,6 +29,7 @@ class Settings(BaseSettings):
     FRONTEND_URL: str = Field("http://localhost:3000", validation_alias='FRONTEND_URL') # Default for local dev
     GCS_BUCKET_NAME: str
     TARGET_SERVICE_ACCOUNT_EMAIL: str | None = Field(None, validation_alias='TARGET_SERVICE_ACCOUNT_EMAIL')
+    GOOGLE_APPLICATION_CREDENTIALS: Optional[str] = None # Path to service account key file (if not using ADC/impersonation)
 
     model_config = SettingsConfigDict(env_file='.env', extra='ignore')
 

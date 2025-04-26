@@ -7,6 +7,7 @@ from .verification_token import VerificationToken # Import the VerificationToken
 from .password_reset_token import PasswordResetToken # noqa: F401
 from .user_profile import UserProfile # Import the new model
 from .organization import Company, Startup # noqa
+from .space import SpaceNode, Workstation # Added import
 
 # You can also import all your models here later so Alembic can find them
 # e.g., from .item import Item 
