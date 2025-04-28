@@ -1,10 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import List
+from typing import List, Optional, Tuple
 import logging
 
 from app import models, schemas, crud
 from app.crud import crud_user_profile
+from app.schemas.matching import MatchResult
 from app.db.session import get_db
 from app.security import get_current_active_user
 
@@ -12,30 +13,59 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-@router.get("/discover", response_model=List[schemas.UserProfile]) # Adjust response model if needed
+# --- Scoring Constants (Keep simple for MVP) ---
+VECTOR_WEIGHT = 0.7
+STRUCTURED_WEIGHT = 0.3
+SHARED_SKILL_SCORE = 5
+SHARED_INDUSTRY_SCORE = 3
+
+
+def calculate_structured_score(
+    requesting_profile: models.UserProfile,
+    candidate_profile: models.UserProfile
+) -> Tuple[int, List[str]]:
+    """Calculates score based on structured data overlaps and returns reasons."""
+    score = 0
+    reasons = []
+    
+    req_skills = set(requesting_profile.skills_expertise or [])
+    cand_skills = set(candidate_profile.skills_expertise or [])
+    shared_skills = req_skills.intersection(cand_skills)
+    if shared_skills:
+        score += len(shared_skills) * SHARED_SKILL_SCORE
+        reasons.extend([f"Shared Skill: {s}" for s in shared_skills])
+        
+    req_industries = set(requesting_profile.industry_focus or [])
+    cand_industries = set(candidate_profile.industry_focus or [])
+    shared_industries = req_industries.intersection(cand_industries)
+    if shared_industries:
+        score += len(shared_industries) * SHARED_INDUSTRY_SCORE
+        reasons.extend([f"Shared Industry: {i}" for i in shared_industries])
+        
+    # Add more scoring logic here if needed (e.g., collaboration preferences)
+    
+    return score, reasons
+
+
+@router.get("/discover", response_model=List[MatchResult])
 async def discover_similar_users(
     *,
     db: AsyncSession = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user)
-) -> List[models.UserProfile]:
+) -> List[MatchResult]:
     """
     Discover users with similar profiles within the same space.
-    Leverages vector similarity search on user profile embeddings.
-    Excludes the user themselves and members of their own company/startup.
+    Calculates a combined score based on vector similarity and structured data.
+    Returns a ranked list with match reasons.
     """
     logger.info(f"Discover endpoint called by user_id={current_user.id}")
 
-    # Eager load profile and potentially space if needed elsewhere
-    # await db.refresh(current_user, attribute_names=['profile', 'space']) 
-
     if not current_user.profile:
-        # Attempt to fetch profile if not loaded, or create if it truly doesn't exist
         profile = await crud_user_profile.get_profile_by_user_id(db, user_id=current_user.id)
         if not profile:
-             # Handle case where profile setup might have failed earlier
              logger.error(f"User {current_user.id} has no profile object. Cannot perform discovery.")
              raise HTTPException(status_code=404, detail="User profile not found. Please complete your profile.")
-        current_user.profile = profile # Attach fetched profile
+        current_user.profile = profile
         
     if current_user.profile.profile_vector is None:
         logger.warning(f"User {current_user.id} profile has no embedding vector.")
@@ -45,12 +75,40 @@ async def discover_similar_users(
         logger.warning(f"User {current_user.id} is not assigned to a space.")
         raise HTTPException(status_code=400, detail="User not assigned to a space. Cannot discover connections.")
 
-    similar_profiles = await crud_user_profile.find_similar_users(
-        db=db, requesting_user=current_user, limit=10 # Default limit or make configurable
+    similar_users_with_distance = await crud_user_profile.find_similar_users(
+        db=db, requesting_user=current_user, limit=20
     )
     
-    logger.info(f"Returning {len(similar_profiles)} similar profiles for user_id={current_user.id}")
+    if not similar_users_with_distance:
+        logger.info(f"No initial similar users found for user_id={current_user.id}")
+        return []
+
+    results = []
+    requesting_profile = current_user.profile
+
+    for candidate_profile, distance in similar_users_with_distance:
+        vector_similarity_score = max(0.0, 1.0 - float(distance)) 
+        match_reasons = ["Similar Profile Vector"]
+        
+        structured_score_raw, structured_reasons = calculate_structured_score(
+            requesting_profile, candidate_profile
+        )
+        match_reasons.extend(structured_reasons)
+        
+        final_score = (VECTOR_WEIGHT * vector_similarity_score * 10) + (STRUCTURED_WEIGHT * structured_score_raw)
+        
+        profile_schema = schemas.UserProfile.model_validate(candidate_profile)
+
+        results.append(MatchResult(
+            profile=profile_schema,
+            score=final_score,
+            reasons=match_reasons
+        ))
+        logger.debug(f"User {candidate_profile.user_id}: Dist={distance:.4f}, VecScore={vector_similarity_score:.4f}, StructScore={structured_score_raw}, Final={final_score:.4f}, Reasons={match_reasons}")
+
+    results.sort(key=lambda x: x.score, reverse=True)
     
-    # Ensure the response matches the response_model structure
-    # If find_similar_users returns UserProfile model objects, ensure schemas.UserProfile can handle them
-    return similar_profiles
+    final_results = results[:10]
+    
+    logger.info(f"Returning {len(final_results)} refined matches for user_id={current_user.id}")
+    return final_results

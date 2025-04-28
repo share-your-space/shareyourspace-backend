@@ -1,7 +1,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.sql import func # Add func for .label()
-from typing import Optional, List # Add List
+from typing import Optional, List, Tuple # Add Tuple
 from pydantic import HttpUrl # Import HttpUrl
 import logging # Import logging
 from sqlalchemy.orm import joinedload # Add joinedload for eager loading user data
@@ -95,7 +95,7 @@ async def find_similar_users(
     *,
     requesting_user: models.User,
     limit: int = 10
-) -> List[UserProfile]:
+) -> List[Tuple[UserProfile, float]]: # Return tuples of (profile, distance)
     """Find users with similar profile vectors within the same space, excluding self and colleagues."""
     if not requesting_user.profile or requesting_user.profile.profile_vector is None:
         logger.warning(f"User {requesting_user.id} has no profile vector. Cannot find similar users.")
@@ -136,14 +136,9 @@ async def find_similar_users(
 
     results = await db.execute(stmt)
     
-    # Extract UserProfile objects and potentially the distance score
-    similar_profiles = []
-    for profile, distance in results.fetchall():
-        # You might want to attach the distance to the profile object or return tuples
-        # For now, just return the profiles
-        # profile.distance = distance # Example of attaching distance (requires schema update)
-        similar_profiles.append(profile)
-        logger.debug(f"Found similar user: {profile.user_id} with distance: {distance}")
+    # Fetch all results as (UserProfile, distance) tuples
+    similar_users_with_distance = results.fetchall()
+    logger.debug(f"Raw similar users found: {[(p.user_id, d) for p, d in similar_users_with_distance]}")
 
-    logger.info(f"Found {len(similar_profiles)} similar users for user_id={user_id}")
-    return similar_profiles
+    logger.info(f"Found {len(similar_users_with_distance)} similar users for user_id={user_id}")
+    return similar_users_with_distance # Return the list of tuples
