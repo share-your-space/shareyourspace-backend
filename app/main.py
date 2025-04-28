@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware # Import CORS Middleware
 # from sqlalchemy import text
 # from app.db.session import get_db
 
-from app.routers import auth, users, organizations, admin # Import the routers
+from app.routers import auth, users, organizations, admin, matching # Import matching router
 from app.core.config import settings
 
 # Define allowed origins (adjust for production later)
@@ -44,6 +44,7 @@ def create_app() -> FastAPI:
     app.include_router(users.router, prefix=settings.API_V1_STR + "/users", tags=["users"])
     app.include_router(organizations.router, prefix=settings.API_V1_STR + "/organizations", tags=["organizations"])
     app.include_router(admin.router, prefix=settings.API_V1_STR + "/admin", tags=["admin"])
+    app.include_router(matching.router, prefix=settings.API_V1_STR + "/matching", tags=["matching"]) # Add matching router
 
     # Simple health check endpoint
     @app.get("/health", tags=["health"])

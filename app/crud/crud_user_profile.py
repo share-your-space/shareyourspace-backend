@@ -1,11 +1,14 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from typing import Optional
+from sqlalchemy.sql import func # Add func for .label()
+from typing import Optional, List # Add List
 from pydantic import HttpUrl # Import HttpUrl
 import logging # Import logging
+from sqlalchemy.orm import joinedload # Add joinedload for eager loading user data
 
 from app import models, schemas
 from app.models.profile import UserProfile # Corrected import path
+from app.models.user import User # Import User model
 from app.schemas.user_profile import UserProfileUpdate # Import the schema directly
 from app.utils.embeddings import generate_embedding # Import the embedding function
 
@@ -86,3 +89,61 @@ async def update_profile(
         raise e 
     
     return db_obj 
+
+async def find_similar_users(
+    db: AsyncSession,
+    *,
+    requesting_user: models.User,
+    limit: int = 10
+) -> List[UserProfile]:
+    """Find users with similar profile vectors within the same space, excluding self and colleagues."""
+    if not requesting_user.profile or requesting_user.profile.profile_vector is None:
+        logger.warning(f"User {requesting_user.id} has no profile vector. Cannot find similar users.")
+        return []
+    if requesting_user.space_id is None:
+        logger.warning(f"User {requesting_user.id} is not associated with a space. Cannot find similar users.")
+        return []
+
+    embedding = requesting_user.profile.profile_vector
+    space_id = requesting_user.space_id
+    user_id = requesting_user.id
+    company_id = requesting_user.company_id
+    startup_id = requesting_user.startup_id
+
+    logger.info(f"Finding similar users for user_id={user_id} in space_id={space_id}")
+
+    stmt = (
+        select(
+            UserProfile,
+            UserProfile.profile_vector.cosine_distance(embedding).label('distance')
+        )
+        .join(User, UserProfile.user_id == User.id) # Join UserProfile with User
+        .filter(User.space_id == space_id) # Filter by the same space_id from the User table
+        .filter(User.id != user_id) # Filter out the user themselves
+        .filter(User.status == 'ACTIVE') # Only match with active users
+        .filter(UserProfile.profile_vector.is_not(None)) # Ensure target users have vectors
+    )
+
+    # Add filters to exclude users from the same company or startup, if applicable
+    if company_id:
+        stmt = stmt.filter(User.company_id != company_id)
+        logger.info(f"Excluding users from company_id={company_id}")
+    if startup_id:
+        stmt = stmt.filter(User.startup_id != startup_id)
+        logger.info(f"Excluding users from startup_id={startup_id}")
+
+    stmt = stmt.order_by(UserProfile.profile_vector.cosine_distance(embedding)).limit(limit)
+
+    results = await db.execute(stmt)
+    
+    # Extract UserProfile objects and potentially the distance score
+    similar_profiles = []
+    for profile, distance in results.fetchall():
+        # You might want to attach the distance to the profile object or return tuples
+        # For now, just return the profiles
+        # profile.distance = distance # Example of attaching distance (requires schema update)
+        similar_profiles.append(profile)
+        logger.debug(f"Found similar user: {profile.user_id} with distance: {distance}")
+
+    logger.info(f"Found {len(similar_profiles)} similar users for user_id={user_id}")
+    return similar_profiles

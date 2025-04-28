@@ -6,4 +6,5 @@ class Token(BaseModel):
     token_type: str
 
 class TokenPayload(BaseModel):
-    sub: Optional[str] = None # 'sub' is the standard JWT field for subject (usually user identifier) 
+    sub: Optional[str] = None # 'sub' is the standard JWT field for subject (usually user identifier)
+    user_id: Optional[int] = None # Add user_id field 

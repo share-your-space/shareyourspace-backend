@@ -1,19 +1,30 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import Select # Import Select for type hint
+from sqlalchemy.orm import Load # Import Load for type hint
 
 from app.models.user import User
 from app.schemas.user import UserCreate, UserUpdateInternal
 from app.utils.security_utils import get_password_hash, verify_password
-from typing import List, Optional
+from typing import List, Optional, Sequence # Import Sequence
 
-async def get_user_by_id(db: AsyncSession, *, user_id: int) -> User | None:
-    """Fetch a single user by ID."""
+async def get_user_by_id(
+    db: AsyncSession, 
+    *, 
+    user_id: int, 
+    options: Optional[Sequence[Load]] = None # Add options parameter
+) -> User | None:
+    """Fetch a single user by ID, optionally applying loading options."""
     try:
-        result = await db.execute(select(User).filter(User.id == user_id))
+        stmt = select(User).filter(User.id == user_id)
+        if options:
+            stmt = stmt.options(*options) # Apply options if provided
+            
+        result = await db.execute(stmt)
         return result.scalars().first()
     except SQLAlchemyError as e:
-        print(f"Database error fetching user by ID: {e}")
+        print(f"Database error fetching user by ID {user_id}: {e}")
         return None
 
 async def get_user_by_email(db: AsyncSession, *, email: str) -> User | None:
