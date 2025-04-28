@@ -23,6 +23,7 @@ class UserProfileUpdate(UserProfileBase):
 class UserProfile(UserProfileBase):
     id: int
     user_id: int
+    full_name: Optional[str] = None # Add full_name field
     profile_picture_signed_url: Optional[str] = None # Added for temporary signed URL
 
     # Pydantic V2 uses model_config instead of Config

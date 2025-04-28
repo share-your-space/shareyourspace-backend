@@ -118,6 +118,7 @@ async def find_similar_users(
             UserProfile.profile_vector.cosine_distance(embedding).label('distance')
         )
         .join(User, UserProfile.user_id == User.id) # Join UserProfile with User
+        .options(joinedload(UserProfile.user)) # Eager load the User relationship
         .filter(User.space_id == space_id) # Filter by the same space_id from the User table
         .filter(User.id != user_id) # Filter out the user themselves
         .filter(User.status == 'ACTIVE') # Only match with active users
