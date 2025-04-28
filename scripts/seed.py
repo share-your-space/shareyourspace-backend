@@ -114,7 +114,7 @@ async def seed_data():
             if not existing_user:
                 user = User(
                     email=email,
-                    hashed_password=get_password_hash(faker.password()),
+                    hashed_password=get_password_hash(faker.password()), # Use faker.password() directly
                     full_name=faker.name(),
                     role=data["role"],
                     status=data["status"],

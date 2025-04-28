@@ -8,6 +8,7 @@ from .password_reset_token import PasswordResetToken # noqa: F401
 from .organization import Company, Startup # noqa
 from .space import SpaceNode, Workstation # Added import
 from .profile import UserProfile # Keep this line
+from .connection import Connection # Add Connection model import
 
 # You can also import all your models here later so Alembic can find them
 # e.g., from .item import Item 
