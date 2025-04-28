@@ -68,14 +68,18 @@ async def update_my_profile(
     current_user: models.User = Depends(security.get_current_active_user),
 ):
     """Update the profile of the currently authenticated user.
+    If profile doesn't exist, it will be created.
     Returns updated profile data including the blob name.
     """
     profile_db = await crud_user_profile.get_profile_by_user_id(db, user_id=current_user.id)
     if not profile_db:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Profile not found. Cannot update.",
-        )
+        # If profile doesn't exist, create one first
+        profile_db = await crud_user_profile.create_profile_for_user(db, user_id=current_user.id)
+        # No longer raise an error, just proceed to update the newly created profile
+        # raise HTTPException(
+        #     status_code=status.HTTP_404_NOT_FOUND,
+        #     detail="Profile not found. Cannot update.",
+        # )
 
     updated_profile_db = await crud_user_profile.update_profile(
         db=db, db_obj=profile_db, obj_in=profile_in

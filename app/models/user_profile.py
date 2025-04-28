@@ -1,6 +1,7 @@
 from sqlalchemy import Column, Integer, String, Text, ForeignKey, Enum as SQLEnum, Boolean
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import ARRAY
+from pgvector.sqlalchemy import Vector
 
 from app.db.base_class import Base
 
@@ -12,7 +13,7 @@ class ContactVisibility(str, enum.Enum):
     PUBLIC = "public"
 
 class UserProfile(Base):
-    __tablename__ = "user_profile"
+    __tablename__ = "user_profiles"
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), unique=True, index=True, nullable=False)
@@ -27,7 +28,7 @@ class UserProfile(Base):
     tools_technologies = Column(ARRAY(String), nullable=True)
     linkedin_profile_url = Column(String, nullable=True)
     profile_picture_url = Column(String, nullable=True)
-    # profile_vector = Column(Vector(768), nullable=True) # Add later in Matching phase
+    profile_vector = Column(Vector(768), nullable=True)
 
     # Relationship back to User (one-to-one)
     user = relationship("User", back_populates="profile") 
