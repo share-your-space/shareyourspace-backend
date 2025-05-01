@@ -1,6 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy.sql import func # Add func for .label()
+from sqlalchemy.sql import func, or_, not_, exists # Add or_, not_, exists
 from typing import Optional, List, Tuple # Add Tuple
 from pydantic import HttpUrl # Import HttpUrl
 import logging # Import logging
@@ -9,6 +9,7 @@ from sqlalchemy.orm import joinedload # Add joinedload for eager loading user da
 from app import models, schemas
 from app.models.profile import UserProfile # Corrected import path
 from app.models.user import User # Import User model
+from app.models.connection import Connection, ConnectionStatus # Add Connection imports
 from app.schemas.user_profile import UserProfileUpdate # Import the schema directly
 from app.utils.embeddings import generate_embedding # Import the embedding function
 
@@ -96,7 +97,7 @@ async def find_similar_users(
     requesting_user: models.User,
     limit: int = 10
 ) -> List[Tuple[UserProfile, float]]: # Return tuples of (profile, distance)
-    """Find users with similar profile vectors within the same space, excluding self and colleagues."""
+    """Find users with similar profile vectors within the same space, excluding self, colleagues, and existing connections."""
     if not requesting_user.profile or requesting_user.profile.profile_vector is None:
         logger.warning(f"User {requesting_user.id} has no profile vector. Cannot find similar users.")
         return []
@@ -112,6 +113,19 @@ async def find_similar_users(
 
     logger.info(f"Finding similar users for user_id={user_id} in space_id={space_id}")
 
+    # Subquery to find user IDs with existing pending or accepted connections
+    existing_connection_subquery = (
+        select(Connection.id)
+        .where(
+            or_(
+                (Connection.requester_id == user_id) & (Connection.recipient_id == User.id),
+                (Connection.recipient_id == user_id) & (Connection.requester_id == User.id)
+            ),
+            Connection.status.in_([ConnectionStatus.PENDING, ConnectionStatus.ACCEPTED])
+        )
+        .limit(1)
+    )
+
     stmt = (
         select(
             UserProfile,
@@ -123,6 +137,7 @@ async def find_similar_users(
         .filter(User.id != user_id) # Filter out the user themselves
         .filter(User.status == 'ACTIVE') # Only match with active users
         .filter(UserProfile.profile_vector.is_not(None)) # Ensure target users have vectors
+        .filter(not_(exists(existing_connection_subquery))) # <-- Add filter to exclude existing connections
     )
 
     # Add filters to exclude users from the same company or startup, if applicable

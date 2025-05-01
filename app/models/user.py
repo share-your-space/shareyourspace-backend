@@ -6,6 +6,7 @@ if TYPE_CHECKING:
     from .organization import Company, Startup # noqa: F401
 
 from app.db.base_class import Base
+from .profile import UserProfile
 
 
 class User(Base):
@@ -31,7 +32,13 @@ class User(Base):
     startup = relationship("Startup", back_populates="members")
 
     # One-to-one relationship to UserProfile
-    profile = relationship("UserProfile", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    profile = relationship(
+        "app.models.profile.UserProfile", 
+        back_populates="user", 
+        uselist=False, 
+        cascade="all, delete-orphan",
+        remote_side=[UserProfile.user_id]
+    )
 
     # Relationships for tokens (if they exist)
     verification_tokens = relationship("VerificationToken", back_populates="user")
@@ -82,4 +89,8 @@ class User(Base):
     # blocks_made = relationship("Block", foreign_keys="[Block.blocker_id]", back_populates="blocker", cascade="all, delete-orphan")
     # blocks_received = relationship("Block", foreign_keys="[Block.blocked_user_id]", back_populates="blocked_user", cascade="all, delete-orphan")
     # reports_made = relationship("Report", foreign_keys="[Report.reporter_id]", back_populates="reporter", cascade="all, delete-orphan")
-    # reports_received = relationship("Report", foreign_keys="[Report.reported_user_id]", back_populates="reported_user") 
+    # reports_received = relationship("Report", foreign_keys="[Report.reported_user_id]", back_populates="reported_user")
+
+    # Define relationships for connections
+    sent_connections = relationship("Connection", foreign_keys="Connection.requester_id", back_populates="requester")
+    received_connections = relationship("Connection", foreign_keys="Connection.recipient_id", back_populates="recipient") 

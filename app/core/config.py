@@ -1,32 +1,32 @@
 import os
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field, EmailStr, HttpUrl
+from pydantic import Field, EmailStr, HttpUrl, PostgresDsn, SecretStr
 from typing import List, Optional
 
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "ShareYourSpace 2.0" # Added default project name
-    DATABASE_URL: str = Field(..., validation_alias='DATABASE_URL')
-    SECRET_KEY: str = Field(..., validation_alias='SECRET_KEY')
-    ALGORITHM: str = Field(..., validation_alias='ALGORITHM')
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(30, validation_alias='ACCESS_TOKEN_EXPIRE_MINUTES') # Default 30 minutes
-    API_V1_STR: str = "/api"
+    DATABASE_URL: PostgresDsn
+    SECRET_KEY: SecretStr
+    ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7 # 1 week
+    API_V1_STR: str = "/api/v1"
 
     # Add other secrets/config variables here later as needed
-    RESEND_API_KEY: str | None = Field(None, validation_alias='RESEND_API_KEY')
-    STRIPE_SECRET_KEY: str | None = Field(None, validation_alias='STRIPE_SECRET_KEY')
-    STRIPE_PUBLISHABLE_KEY: str | None = Field(None, validation_alias='STRIPE_PUBLISHABLE_KEY')
-    STRIPE_WEBHOOK_SECRET: str | None = Field(None, validation_alias='STRIPE_WEBHOOK_SECRET')
-    GOOGLE_CLIENT_ID: str | None = Field(None, validation_alias='GOOGLE_CLIENT_ID')
-    GOOGLE_CLIENT_SECRET: str | None = Field(None, validation_alias='GOOGLE_CLIENT_SECRET')
-    LINKEDIN_CLIENT_ID: str | None = Field(None, validation_alias='LINKEDIN_CLIENT_ID')
-    LINKEDIN_CLIENT_SECRET: str | None = Field(None, validation_alias='LINKEDIN_CLIENT_SECRET')
-    APPLE_CLIENT_ID: str | None = Field(None, validation_alias='APPLE_CLIENT_ID')
-    APPLE_TEAM_ID: str | None = Field(None, validation_alias='APPLE_TEAM_ID')
-    APPLE_KEY_ID: str | None = Field(None, validation_alias='APPLE_KEY_ID')
-    APPLE_PRIVATE_KEY: str | None = Field(None, validation_alias='APPLE_PRIVATE_KEY')
-    GOOGLE_AI_API_KEY: str | None = Field(None, validation_alias='GOOGLE_AI_API_KEY')
-    FRONTEND_URL: str = Field("http://localhost:3000", validation_alias='FRONTEND_URL') # Default for local dev
+    RESEND_API_KEY: SecretStr | None = None
+    STRIPE_SECRET_KEY: SecretStr | None = None
+    STRIPE_PUBLISHABLE_KEY: str | None = None # No SecretStr needed
+    STRIPE_WEBHOOK_SECRET: SecretStr | None = None
+    GOOGLE_CLIENT_ID: str | None = None
+    GOOGLE_CLIENT_SECRET: SecretStr | None = None
+    LINKEDIN_CLIENT_ID: str | None = None
+    LINKEDIN_CLIENT_SECRET: SecretStr | None = None
+    APPLE_CLIENT_ID: str | None = None
+    APPLE_TEAM_ID: str | None = None
+    APPLE_KEY_ID: str | None = None
+    APPLE_PRIVATE_KEY: SecretStr | None = None
+    GOOGLE_AI_API_KEY: SecretStr | None = None
+    FRONTEND_URL: str = Field(default="http://localhost:3000", description="Base URL for the frontend application")
     GCS_BUCKET_NAME: str
     TARGET_SERVICE_ACCOUNT_EMAIL: str | None = Field(None, validation_alias='TARGET_SERVICE_ACCOUNT_EMAIL')
     GOOGLE_APPLICATION_CREDENTIALS: Optional[str] = None # Path to service account key file (if not using ADC/impersonation)

@@ -8,7 +8,8 @@ logger = logging.getLogger(__name__)
 
 # Configure the client
 if settings.GOOGLE_AI_API_KEY:
-    genai.configure(api_key=settings.GOOGLE_AI_API_KEY)
+    # Extract the actual string value from SecretStr
+    genai.configure(api_key=settings.GOOGLE_AI_API_KEY.get_secret_value())
 else:
     logger.warning("GOOGLE_AI_API_KEY not found in settings. Embedding generation will fail.")
 
@@ -17,6 +18,7 @@ EMBEDDING_MODEL = "models/text-embedding-004"
 
 def generate_embedding(text: str) -> List[float] | None:
     """Generates an embedding for the given text using the Google AI API."""
+    # Check if key exists *before* trying to use the client
     if not settings.GOOGLE_AI_API_KEY:
         logger.error("Cannot generate embedding: GOOGLE_AI_API_KEY is not configured.")
         return None

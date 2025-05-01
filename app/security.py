@@ -14,7 +14,7 @@ from app import crud, models # Removed schemas from here
 
 # Define the OAuth2 scheme
 # Use the URL of your token endpoint (login endpoint)
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login") # Ensure correct path
 
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:
@@ -25,7 +25,8 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None) -> s
         # Default token expiry: Consider making this configurable
         expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES) # Use config if available
     to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    # Use .get_secret_value() to get the actual string key
+    encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY.get_secret_value(), algorithm=settings.ALGORITHM)
     return encoded_jwt
 
 async def get_current_user(
@@ -37,8 +38,9 @@ async def get_current_user(
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
+        # Use .get_secret_value() for decoding as well
         payload = jwt.decode(
-            token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
+            token, settings.SECRET_KEY.get_secret_value(), algorithms=[settings.ALGORITHM]
         )
         username: str = payload.get("sub")
         user_id: int | None = payload.get("user_id") # Assuming user_id is in token

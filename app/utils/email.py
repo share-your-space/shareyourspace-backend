@@ -15,7 +15,8 @@ def send_email(to: str, subject: str, html_content: str) -> None:
         return
 
     try:
-        resend.api_key = settings.RESEND_API_KEY
+        # Correctly extract the secret value from SecretStr
+        resend.api_key = settings.RESEND_API_KEY.get_secret_value()
         params = {
             "from": "ShareYourSpace Onboarding <onboarding@shareyourspace.app>",
             "to": [to],

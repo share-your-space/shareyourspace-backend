@@ -3,6 +3,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 import secrets
 from datetime import datetime, timedelta, timezone
+import logging
 
 # --- CRUD Imports ---
 import app.crud.crud_user as crud_user
@@ -25,6 +26,8 @@ from app.utils.email import send_email
 from app.core.config import settings
 from app.utils.security_utils import verify_password
 from app import security
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -104,29 +107,51 @@ async def verify_email(
         await crud_verification_token.delete_verification_token(db=db, token_obj=db_token)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-    # Determine the next status based on role
-    next_status = ""
-    if user.role in ["STARTUP_ADMIN", "STARTUP_MEMBER", "FREELANCER"]:
-        next_status = "WAITLISTED"
-    elif user.role in ["CORP_ADMIN", "CORP_EMPLOYEE"]:
-        next_status = "PENDING_ONBOARDING"
-    else:
-        next_status = "ACTIVE" # Default or for SYS_ADMIN if applicable
+    # Determine the next status based on role (We might not need to set status here anymore)
+    # next_status = ""
+    # if user.role in ["STARTUP_ADMIN", "STARTUP_MEMBER", "FREELANCER"]:
+    #     next_status = "WAITLISTED"
+    # elif user.role in ["CORP_ADMIN", "CORP_EMPLOYEE"]:
+    #     next_status = "PENDING_ONBOARDING"
+    # else:
+    #     next_status = "ACTIVE" # Default or for SYS_ADMIN if applicable
 
-    # Update user status if they are still pending verification
-    if user.status == "PENDING_VERIFICATION":
-        updated_user_data = user_schemas.UserUpdateInternal(status=next_status)
-        await crud_user.update_user_internal(db=db, db_obj=user, obj_in=updated_user_data)
-        # Re-fetch the user to ensure we have the latest state including role after update
-        user = await crud_user.get_user_by_id(db=db, user_id=db_token.user_id)
-        if not user: # Should ideally not happen, but good practice to check
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found after status update.")
+    # Activate user if they are not already active
+    if not user.is_active: # Check if user is not active yet
+        # Set is_active to True upon successful verification
+        # We don't necessarily need to change the status here, 
+        # as it should have been set correctly during creation.
+        # If the status was somehow wrong, it should be fixed elsewhere.
+        # updated_user_data = user_schemas.UserUpdateInternal(status=user.status, is_active=True)
+        updated_user_data = user_schemas.UserUpdateInternal(is_active=True) # Just activate
+        
+        logger.info(f"Attempting to activate user {user.id} (current status: {user.status}). Setting is_active=True.")
+        
+        try:
+            await crud_user.update_user_internal(db=db, db_obj=user, obj_in=updated_user_data)
+            # Re-fetch the user to ensure we have the latest state
+            user = await crud_user.get_user_by_id(db=db, user_id=db_token.user_id)
+            
+            if user:
+                 logger.info(f"User {user.id} state after activation: status={user.status}, is_active={user.is_active}")
+            else:
+                 # This case is highly unlikely if the update worked
+                 logger.error(f"User {db_token.user_id} not found after attempting activation update!")
+                 # Even if user not found after update, proceed to delete token
+        
+        except Exception as e:
+            logger.error(f"Error activating user {db_token.user_id}: {e}", exc_info=True)
+            # Decide if we should raise an HTTP exception or just log and continue to delete token
+            # For now, let's log and continue to prevent leaving tokens indefinitely
+            pass # Continue to token deletion even if update fails? Or re-raise? Let's continue for now.
 
-    # Delete the used token
+
+    # Delete the used token (always do this if token was valid)
     await crud_verification_token.delete_verification_token(db=db, token_obj=db_token)
 
-    # Return success message along with the user's role
-    return {"success": True, "message": "Email verified successfully!", "role": user.role}
+    # Return success message along with the user's role (fetch role from user obj if re-fetched)
+    final_role = user.role if user else "unknown" # Handle case where user might be None after failed update/refetch
+    return {"success": True, "message": "Email verified successfully!", "role": final_role}
 
 @router.post("/login")
 async def login_for_access_token(

@@ -1,3 +1,6 @@
+import logging # Add logging
+import sys # Add sys
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware # Import CORS Middleware
 # Remove unused imports if AsyncSession/text/get_db are no longer needed directly here
@@ -5,8 +8,22 @@ from fastapi.middleware.cors import CORSMiddleware # Import CORS Middleware
 # from sqlalchemy import text
 # from app.db.session import get_db
 
-from app.routers import auth, users, organizations, admin, matching, connections # Import connections router
+from app.routers import auth, users, organizations, admin, matching, connections, notifications # Import connections router
 from app.core.config import settings
+
+# --- Basic Logging Configuration ---
+logging.basicConfig(
+    level=logging.INFO, # Set the root logger level
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.StreamHandler(sys.stdout) # Log to stdout
+    ]
+)
+# Set specific log levels for libraries if needed (optional)
+# logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING) 
+# logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+# --- End Logging Configuration ---
+
 
 # Define allowed origins (adjust for production later)
 # For development, allow your frontend origin
@@ -46,6 +63,7 @@ def create_app() -> FastAPI:
     app.include_router(admin.router, prefix=settings.API_V1_STR + "/admin", tags=["admin"])
     app.include_router(matching.router, prefix=settings.API_V1_STR + "/matching", tags=["matching"])
     app.include_router(connections.router, prefix=settings.API_V1_STR + "/connections", tags=["connections"]) # Add connections router
+    app.include_router(notifications.router, prefix=settings.API_V1_STR + "/notifications", tags=["notifications"]) # Add notifications router
 
     # Simple health check endpoint
     @app.get("/health", tags=["health"])

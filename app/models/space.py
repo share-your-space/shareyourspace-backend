@@ -11,7 +11,8 @@ class SpaceNode(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, index=True, nullable=False)
     location_description = Column(String, nullable=True)
-    corporate_admin_id = Column(Integer, ForeignKey('users.id'), nullable=False) # Assuming 'users' table name
+    # Allow corporate_admin_id to be NULL initially or for generic spaces
+    corporate_admin_id = Column(Integer, ForeignKey('users.id'), nullable=True) 
     total_workstations = Column(Integer, nullable=False)
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())

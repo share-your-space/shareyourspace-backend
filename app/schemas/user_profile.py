@@ -1,6 +1,6 @@
 from pydantic import BaseModel, HttpUrl, ConfigDict
 from typing import Optional, List
-from app.models.profile import ContactVisibility # Corrected import path
+from app.models.enums import ContactVisibility
 
 # Base properties shared by profile models
 class UserProfileBase(BaseModel):

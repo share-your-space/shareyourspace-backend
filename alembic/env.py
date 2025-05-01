@@ -20,9 +20,18 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 # Now settings should correctly load variables from the .env file
 from app.core.config import settings
 from app.db.base_class import Base
-# Import your models here so Base has them registered
-from app.models import * # Import all models from the models package
-# from app.models.item import Item # Example
+
+# --- Import all necessary models for Alembic autogenerate ---
+# Ensure all models are imported here so Base.metadata is complete
+from app.models.user import User
+from app.models.organization import Company, Startup
+from app.models.profile import UserProfile
+from app.models.space import SpaceNode, Workstation
+from app.models.connection import Connection
+from app.models.notification import Notification
+from app.models.verification_token import VerificationToken
+from app.models.password_reset_token import PasswordResetToken
+# --- End Model Imports ---
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

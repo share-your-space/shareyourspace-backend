@@ -3,11 +3,14 @@ from sqlalchemy.future import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import Select # Import Select for type hint
 from sqlalchemy.orm import Load # Import Load for type hint
+import logging # Add logging import
 
 from app.models.user import User
 from app.schemas.user import UserCreate, UserUpdateInternal
 from app.utils.security_utils import get_password_hash, verify_password
 from typing import List, Optional, Sequence # Import Sequence
+
+logger = logging.getLogger(__name__) # Add logger instance
 
 async def get_user_by_id(
     db: AsyncSession, 
@@ -74,16 +77,20 @@ async def create_user(db: AsyncSession, *, obj_in: UserCreate) -> User:
 async def update_user_internal(db: AsyncSession, *, db_obj: User, obj_in: UserUpdateInternal) -> User:
     """Update user fields internally (e.g., status)."""
     update_data = obj_in.model_dump(exclude_unset=True)
+    logger.info(f"Updating user {db_obj.id}. Current state: status={db_obj.status}, is_active={db_obj.is_active}. Update data: {update_data}")
     for field, value in update_data.items():
         setattr(db_obj, field, value)
+    logger.info(f"User {db_obj.id} state after setattr: status={db_obj.status}, is_active={db_obj.is_active}") # Log after setattr
     db.add(db_obj)
     try:
         await db.commit()
+        logger.info(f"User {db_obj.id} update commit successful.")
         await db.refresh(db_obj)
+        logger.info(f"User {db_obj.id} state after refresh: status={db_obj.status}, is_active={db_obj.is_active}")
         return db_obj
     except SQLAlchemyError as e:
         await db.rollback()
-        print(f"Database error updating user internal: {e}")
+        logger.error(f"Database error during internal update for user {db_obj.id}: {e}", exc_info=True) # Log exception info
         raise 
 
 async def update_user_password(db: AsyncSession, *, user: User, new_password: str) -> User:

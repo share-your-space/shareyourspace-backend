@@ -1,8 +1,16 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, UniqueConstraint, func
+import enum # Add enum import
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, UniqueConstraint, func, Enum as SqlEnum # Add SqlEnum import
 from sqlalchemy.orm import relationship
 
 from app.db.base_class import Base
 from app.models.user import User # Import User for relationships
+
+# Define the ConnectionStatus Enum
+class ConnectionStatus(str, enum.Enum):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    DECLINED = "declined"
+    BLOCKED = "blocked"
 
 class Connection(Base):
     __tablename__ = "connections"
@@ -10,8 +18,8 @@ class Connection(Base):
     id = Column(Integer, primary_key=True, index=True)
     requester_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     recipient_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    # Consider using an Enum for status if you prefer stricter type checking
-    status = Column(String, nullable=False, default='pending', index=True) # e.g., 'pending', 'accepted', 'declined', 'blocked'
+    # Use the Enum for the status column
+    status = Column(SqlEnum(ConnectionStatus), nullable=False, default=ConnectionStatus.PENDING, index=True)
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
 
