@@ -1,0 +1,81 @@
+from datetime import datetime
+from typing import Optional, List
+from pydantic import BaseModel
+
+# Assuming a User schema exists for embedding sender/recipient info
+from .user import User as UserSchema
+
+# --- Conversation Schemas --- #
+class ConversationParticipantBase(BaseModel):
+    user_id: int
+
+class ConversationParticipantCreate(ConversationParticipantBase):
+    pass
+
+class ConversationParticipantSchema(ConversationParticipantBase):
+    user: UserSchema
+    model_config = {
+        'from_attributes': True
+    }
+
+class ConversationBase(BaseModel):
+    pass
+
+class ConversationCreate(ConversationBase):
+    # Typically created with a list of participant user IDs
+    participant_ids: List[int]
+
+class ConversationSchema(ConversationBase):
+    id: int
+    created_at: datetime
+    participants: List[UserSchema]
+
+    model_config = {
+        'from_attributes': True
+    }
+
+# --- Chat Message Schemas --- #
+
+# Schema for receiving message content from client
+class ChatMessageCreate(BaseModel):
+    recipient_id: Optional[int] = None
+    conversation_id: Optional[int] = None
+    content: str
+    attachment_url: Optional[str] = None
+    attachment_filename: Optional[str] = None
+    attachment_mimetype: Optional[str] = None
+
+# Base schema for message properties included in responses
+class ChatMessageBase(BaseModel):
+    id: int
+    sender_id: int
+    recipient_id: Optional[int] = None
+    conversation_id: Optional[int] = None
+    content: str
+    created_at: datetime
+    read_at: Optional[datetime] = None
+    attachment_url: Optional[str] = None
+    attachment_filename: Optional[str] = None
+    attachment_mimetype: Optional[str] = None
+
+# Full message schema including loaded relationships
+class ChatMessageSchema(ChatMessageBase):
+    sender: UserSchema
+
+    model_config = {
+        'from_attributes': True
+    }
+
+# Schema for representing a conversation in the list view for the frontend
+class ConversationInfo(BaseModel):
+    id: int
+    other_user: UserSchema
+    last_message: Optional[ChatMessageSchema] = None
+    unread_count: int = 0
+
+    model_config = {
+        'from_attributes': True
+    }
+
+# To resolve forward reference for ConversationSchema.messages if you uncomment it
+# ConversationSchema.model_rebuild() 

@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .space import SpaceNode, Workstation # noqa: F401
     from .organization import Company, Startup # noqa: F401
+    from .chat import Conversation # noqa: F401
 
 from app.db.base_class import Base
 from .profile import UserProfile
@@ -93,4 +94,11 @@ class User(Base):
 
     # Define relationships for connections
     sent_connections = relationship("Connection", foreign_keys="Connection.requester_id", back_populates="requester")
-    received_connections = relationship("Connection", foreign_keys="Connection.recipient_id", back_populates="recipient") 
+    received_connections = relationship("Connection", foreign_keys="Connection.recipient_id", back_populates="recipient")
+
+    # Relationship for Conversations (many-to-many via ConversationParticipant)
+    conversations = relationship(
+        "Conversation", # String name of the related model
+        secondary="conversation_participants", # Name of the association table
+        back_populates="participants" # Name of the relationship on the Conversation model
+    ) 

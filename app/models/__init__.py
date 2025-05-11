@@ -18,6 +18,7 @@ from .notification import Notification # Needed by routers?
 from .password_reset_token import PasswordResetToken # Needed by auth?
 from .verification_token import VerificationToken # Needed by auth?
 from .enums import ContactVisibility # Needed by profile model/schema
+from .chat import ChatMessage # Add ChatMessage model import
 
 # You can also import all your models here later so Alembic can find them
 # e.g., from .item import Item 

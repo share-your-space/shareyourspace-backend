@@ -4,6 +4,9 @@ from . import crud_verification_token # noqa
 from . import crud_password_reset_token # noqa
 from . import crud_organization # noqa
 from . import crud_space # noqa
+from . import crud_connection # noqa: Import connection CRUD
+from . import crud_notification # noqa: Import notification CRUD
+from . import crud_chat # noqa: Import chat CRUD
 
 # Add other CRUD modules here as they are created 
 

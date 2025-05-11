@@ -9,6 +9,7 @@ import google.auth
 from google.auth.transport.requests import Request
 from google.oauth2 import service_account
 from google.auth import impersonated_credentials
+from datetime import timedelta
 
 from app.core.config import settings
 
@@ -50,15 +51,7 @@ def upload_file(
     file: UploadFile,
     destination_blob_name: str
 ) -> str | None:
-    """Uploads a file to the GCS bucket.
-
-    Args:
-        file: The FastAPI UploadFile object.
-        destination_blob_name: The desired name for the blob in GCS.
-
-    Returns:
-        The destination_blob_name if upload was successful, otherwise None.
-    """
+    """Uploads a file to the GCS bucket and returns a signed URL valid for 1 hour."""
     if not GCS_BUCKET or not storage_client:
         logger.error("GCS bucket or client not initialized. Cannot upload file.")
         return None
@@ -67,13 +60,13 @@ def upload_file(
 
     try:
         # Upload the file content directly from the UploadFile object
-        # Ensure the file pointer is at the beginning
         file.file.seek(0)
         blob.upload_from_file(file.file, content_type=file.content_type)
 
         logger.info(f"File {file.filename} uploaded to {destination_blob_name}.")
-        # Return the blob name, not the public URL
-        return destination_blob_name
+        # Generate a signed URL valid for 1 hour
+        url = blob.generate_signed_url(expiration=timedelta(hours=1))
+        return url
 
     except GoogleAPICallError as e:
         logger.error(f"GCS API error during upload to {destination_blob_name}: {e}", exc_info=True)
