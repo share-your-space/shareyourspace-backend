@@ -7,6 +7,8 @@ class NotificationBase(BaseModel):
     type: str
     message: str
     related_entity_id: Optional[int] = None
+    reference: Optional[str] = None
+    link: Optional[str] = None
 
 # Properties stored in DB
 class NotificationInDBBase(NotificationBase):
@@ -22,3 +24,6 @@ class NotificationInDBBase(NotificationBase):
 # Properties to return to client
 class Notification(NotificationInDBBase):
     pass # Return all DB fields for now 
+
+class NotificationUpdate(BaseModel):
+    is_read: Optional[bool] = None 

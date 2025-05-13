@@ -14,6 +14,7 @@ from app.routers import (
 )
 from app.core.config import settings
 from app.socket_handlers import register_socketio_handlers # Import handler registration function
+from app.socket_instance import sio # <--- IMPORT SIO FROM NEW LOCATION
 from app.db.session import engine # If using synchronous engine for models creation
 from app.db import base_class # To create tables if not using Alembic or for initial setup
 
@@ -89,15 +90,14 @@ def create_app() -> FastAPI:
 fastapi_app = create_app() # Rename to avoid conflict
 
 # --- Socket.IO Server Setup ---
-# Configure allowed origins for Socket.IO (match FastAPI CORS or be more specific)
-# For production, use a specific list, not "*"
-sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*') # TODO: Restrict origins for production
+# REMOVE OLD SIO DEFINITION:
+# sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*') 
 
 # Register event handlers defined in socket_handlers.py
-register_socketio_handlers(sio)
+register_socketio_handlers(sio) # Uses the imported sio
 
 # Wrap FastAPI app with Socket.IO middleware
-app = socketio.ASGIApp(sio, other_asgi_app=fastapi_app)
+app = socketio.ASGIApp(sio, other_asgi_app=fastapi_app) # Uses the imported sio
 # --- End Socket.IO Setup ---
 
 

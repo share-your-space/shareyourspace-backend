@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session # For DB operations
 from app.core.config import settings
 from app.db.session import AsyncSessionLocal # Import session factory
 from app import crud, models # Ensure models is imported
+from app.crud import crud_user # <<< ADDED IMPORT
 from app.schemas.token import TokenPayload # Import schema
 from app.schemas.chat import ChatMessageCreate, ChatMessageSchema # Import chat schemas
 from app.crud.crud_chat import (
@@ -142,8 +143,11 @@ def register_socketio_handlers(sio: socketio.AsyncServer):
 
             # Save message to database
             try:
-                db_message = await crud.crud_chat.create_message(
-                    db=db, obj_in=message_in, sender_id=sender_id
+                db_message = await create_message( 
+                    db=db, 
+                    obj_in=message_in, 
+                    sender_id=sender_id,
+                    online_user_ids=online_user_ids # Pass the global set
                 )
                 logger.info(f"Message saved to DB (ID: {db_message.id}), Att: {db_message.attachment_filename}")
             except Exception as e:
@@ -153,6 +157,10 @@ def register_socketio_handlers(sio: socketio.AsyncServer):
             # Convert to Pydantic schema for broadcasting
             message_data = ChatMessageSchema.model_validate(db_message).model_dump(mode='json')
 
+            # Fetch sender's details for notification
+            sender_user = await crud_user.get_user_by_id(db, user_id=sender_id)
+            sender_name = sender_user.full_name if sender_user else "Someone"
+
         recipient_room = str(recipient_id)
         logger.info(f"Emitting 'receive_message' to room: {recipient_room}")
         await sio.emit('receive_message', message_data, room=recipient_room)
@@ -160,6 +168,23 @@ def register_socketio_handlers(sio: socketio.AsyncServer):
         sender_room = str(sender_id)
         logger.info(f"Emitting 'receive_message' back to sender room: {sender_room}")
         await sio.emit('receive_message', message_data, room=sender_room)
+
+        # Emit notification to recipient (if not themselves)
+        if sender_id != recipient_id:
+            message_preview = (db_message.content[:50] + '...') if db_message.content and len(db_message.content) > 50 else db_message.content
+            if not message_preview and db_message.attachment_filename: # If no content, use filename as preview
+                message_preview = f"Attachment: {db_message.attachment_filename}"
+            
+            notification_payload = {
+                "message_id": db_message.id,
+                "conversation_id": db_message.conversation_id,
+                "sender_id": sender_id,
+                "sender_name": sender_name,
+                "message_preview": message_preview,
+                "created_at": db_message.created_at.isoformat() # Include timestamp
+            }
+            logger.info(f"Emitting 'new_message_notification' to room {recipient_room} for message {db_message.id}")
+            await sio.emit('new_message_notification', notification_payload, room=recipient_room)
 
     # --- Read Receipt Handler ---
     @sio.on('mark_as_read')

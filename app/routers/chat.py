@@ -1,12 +1,18 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status # Add WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import List # Import List
+from typing import List, Optional
+import logging # Add logging
 
 from app import crud, models, schemas # schemas.chat will be used
 from app.db.session import get_db
 from app.security import get_current_active_user # Assuming this dependency exists
+from app.schemas.chat import MessageReactionCreate, MessageReactionResponse, MessageReactionsListResponse
+from app.socket_instance import sio # <--- IMPORT SIO FROM NEW LOCATION
+from app.schemas.notification import NotificationUpdate # Assuming this schema exists or we will create it
+from app.crud.crud_notification import mark_notifications_as_read_by_ref # Assuming this exists or we will create it
 
 router = APIRouter()
+logger = logging.getLogger(__name__) # Add logger instance
 
 
 @router.get(
@@ -62,4 +68,140 @@ async def get_messages_for_conversation_with_user(
     messages = await crud.crud_chat.get_messages_for_conversation(
         db=db, conversation_id=conversation.id, skip=skip, limit=limit
     )
-    return messages 
+    return messages
+
+@router.post("/messages/{message_id}/reactions", response_model=MessageReactionResponse | None)
+async def add_or_toggle_reaction(
+    message_id: int,
+    reaction_in: MessageReactionCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user)
+):
+    reaction_orm = await crud.crud_chat.add_or_toggle_reaction(
+        db,
+        message_id=message_id,
+        user_id=current_user.id,
+        emoji=reaction_in.emoji
+    )
+
+    chat_message = await crud.crud_chat.get_chat_message_by_id(db, message_id=message_id)
+    if chat_message and chat_message.conversation:
+        conversation = chat_message.conversation
+        action = "added" if reaction_orm else "removed"
+        reaction_payload = None
+        if reaction_orm:
+            await db.refresh(reaction_orm) 
+            reaction_payload = MessageReactionResponse.model_validate(reaction_orm).model_dump(mode='json')
+
+        for participant in conversation.participants:
+            logger.info(f"Attempting to emit 'reaction_updated' to room: {str(participant.id)} for conversation {conversation.id}")
+            logger.info(f"Reaction payload for emit: {reaction_payload}")
+            await sio.emit(
+                "reaction_updated",
+                data={
+                    "message_id": message_id,
+                    "conversation_id": conversation.id,
+                    "reaction": reaction_payload,
+                    "user_id_who_reacted": current_user.id,
+                    "emoji": reaction_in.emoji, # The emoji that was acted upon
+                    "action": action,
+                },
+                room=str(participant.id)
+            )
+    
+    return reaction_orm
+
+@router.delete("/messages/{message_id}/reactions", response_model=dict)
+async def remove_reaction(
+    message_id: int,
+    emoji: str, # emoji is a query parameter for DELETE
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user)
+):
+    success = await crud.crud_chat.remove_reaction(
+        db,
+        message_id=message_id,
+        user_id=current_user.id,
+        emoji=emoji
+    )
+    if not success:
+        raise HTTPException(status_code=404, detail="Reaction not found or already removed")
+
+    chat_message = await crud.crud_chat.get_chat_message_by_id(db, message_id=message_id)
+    if chat_message and chat_message.conversation:
+        conversation = chat_message.conversation
+        logger.info(f"Attempting to emit 'reaction_updated' (action: removed) to rooms for conversation {conversation.id}")
+        for participant in conversation.participants:
+            logger.info(f"Emitting reaction removal to user {str(participant.id)} for message {message_id}, emoji {emoji}")
+            await sio.emit(
+                "reaction_updated",
+                data={
+                    "message_id": message_id,
+                    "conversation_id": conversation.id,
+                    "reaction": None, 
+                    "user_id_who_reacted": current_user.id,
+                    "emoji": emoji, 
+                    "action": "removed",
+                },
+                room=str(participant.id)
+            )
+
+    return {"ok": True}
+
+@router.get("/messages/{message_id}/reactions", response_model=MessageReactionsListResponse)
+async def get_reactions_for_message(
+    message_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user)
+):
+    reactions = await crud.crud_chat.get_reactions_for_message(db, message_id=message_id)
+    return {"reactions": reactions}
+
+@router.post(
+    "/conversations/{conversation_id}/read", 
+    status_code=status.HTTP_204_NO_CONTENT, # Use 204 No Content for successful updates with no body
+    summary="Mark Conversation as Read",
+    description="Updates the timestamp indicating the current user has read the specified conversation."
+)
+async def mark_conversation_as_read_endpoint(
+    conversation_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """
+    Marks a conversation as read for the current user by updating their 
+    `last_read_at` timestamp in the ConversationParticipant record.
+    Also marks related 'new_chat_message' notifications as read.
+    """
+    updated = await crud.crud_chat.mark_conversation_as_read(
+        db=db, 
+        conversation_id=conversation_id, 
+        user_id=current_user.id
+    )
+    
+    if not updated:
+        # This could mean the conversation doesn't exist or the user isn't a participant.
+        # Raising 404 is appropriate as the target resource (user's participation) wasn't found/updated.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found or user is not a participant."
+        )
+
+    # Now, mark related notifications as read
+    # We need a way to link notifications to conversations. Assuming a reference like `conversation:{id}`
+    notification_ref = f"conversation:{conversation_id}"
+    try:
+        # Assuming mark_notifications_as_read_by_ref exists and handles not finding notifications gracefully
+        # We'll implement/verify this function in crud_notification next.
+        await crud.crud_notification.mark_notifications_as_read_by_ref(
+            db=db,
+            user_id=current_user.id,
+            reference=notification_ref
+        )
+        logger.info(f"Marked notifications as read for user {current_user.id} with reference {notification_ref}")
+    except Exception as e:
+        # Log error but don't fail the request just because notification update failed
+        logger.error(f"Failed to mark notifications as read for user {current_user.id} with reference {notification_ref}: {e}")
+
+    # If successful, return No Content (HTTP 204)
+    return None 

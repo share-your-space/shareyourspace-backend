@@ -34,6 +34,28 @@ class ConversationSchema(ConversationBase):
         'from_attributes': True
     }
 
+# --- Message Reaction Schemas (MOVED UP) --- #
+class MessageReactionBase(BaseModel):
+    emoji: str
+
+class MessageReactionCreate(MessageReactionBase):
+    pass
+
+class MessageReactionResponse(MessageReactionBase):
+    id: int
+    message_id: int
+    user_id: int
+    created_at: datetime
+    # Optionally include user info
+    # user: UserSchema | None = None
+
+    model_config = {
+        'from_attributes': True
+    }
+
+class MessageReactionsListResponse(BaseModel):
+    reactions: list[MessageReactionResponse]
+
 # --- Chat Message Schemas --- #
 
 # Schema for receiving message content from client
@@ -61,6 +83,7 @@ class ChatMessageBase(BaseModel):
 # Full message schema including loaded relationships
 class ChatMessageSchema(ChatMessageBase):
     sender: UserSchema
+    reactions: List[MessageReactionResponse] = []
 
     model_config = {
         'from_attributes': True
@@ -71,7 +94,7 @@ class ConversationInfo(BaseModel):
     id: int
     other_user: UserSchema
     last_message: Optional[ChatMessageSchema] = None
-    unread_count: int = 0
+    has_unread_messages: bool
 
     model_config = {
         'from_attributes': True
@@ -79,3 +102,5 @@ class ConversationInfo(BaseModel):
 
 # To resolve forward reference for ConversationSchema.messages if you uncomment it
 # ConversationSchema.model_rebuild() 
+
+# ConversationSchema.model_rebuild() # May not be needed if Pydantic handles it 

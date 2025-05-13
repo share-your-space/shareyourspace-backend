@@ -14,7 +14,9 @@ async def create_notification(
     user_id: int, 
     type: str, 
     message: str, 
-    related_entity_id: Optional[int] = None
+    related_entity_id: Optional[int] = None,
+    reference: Optional[str] = None,
+    link: Optional[str] = None
 ) -> Notification:
     """Create a new notification."""
     db_notification = Notification(
@@ -22,6 +24,8 @@ async def create_notification(
         type=type,
         message=message,
         related_entity_id=related_entity_id,
+        reference=reference,
+        link=link,
         is_read=False
     )
     db.add(db_notification)
@@ -92,4 +96,32 @@ async def mark_all_notifications_as_read(db: AsyncSession, *, user_id: int) -> i
     await db.commit() # Commit the change
     count = result.rowcount
     logger.info(f"Marked {count} notifications as read for user {user_id}")
+    return count
+
+async def mark_notifications_as_read_by_ref(
+    db: AsyncSession, 
+    *, 
+    user_id: int, 
+    reference: str,
+    notification_type: str = "new_chat_message"
+) -> int:
+    """Mark all unread notifications for a user with a specific reference and type as read.
+       Returns the count of notifications marked as read.
+    """
+    stmt = (
+        update(Notification)
+        .where(
+            Notification.user_id == user_id,
+            Notification.reference == reference,
+            Notification.type == notification_type,
+            Notification.is_read == False
+        )
+        .values(is_read=True)
+        .execution_options(synchronize_session=False)
+    )
+    result = await db.execute(stmt)
+    await db.commit()
+    count = result.rowcount
+    if count > 0:
+        logger.info(f"Marked {count} notifications of type '{notification_type}' as read for user {user_id} with reference '{reference}'")
     return count 

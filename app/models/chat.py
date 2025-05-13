@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, Text, ForeignKey, DateTime, func, String
+from sqlalchemy import Column, Integer, Text, ForeignKey, DateTime, func, String, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from app.db.base_class import Base
@@ -17,8 +17,14 @@ class Conversation(Base):
 
 class ConversationParticipant(Base):
     __tablename__ = "conversation_participants"
-    conversation_id = Column(Integer, ForeignKey("conversations.id"), primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
+    conversation_id = Column(Integer, ForeignKey("conversations.id", ondelete="CASCADE"), primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    joined_at = Column(DateTime(timezone=True), server_default=func.now())
+    # New field to track when the user last read messages in this conversation
+    last_read_at = Column(DateTime(timezone=True), nullable=True)
+
+    user = relationship("User")
+    conversation = relationship("Conversation")
 
 
 class ChatMessage(Base):
@@ -45,4 +51,23 @@ class ChatMessage(Base):
     sender = relationship("User", foreign_keys=[sender_id], backref="sent_messages")
     recipient = relationship("User", foreign_keys=[recipient_id], backref="received_messages") # This backref might need adjustment if using conversations primarily
     
-    conversation = relationship("Conversation", back_populates="messages", foreign_keys=[conversation_id]) 
+    conversation = relationship("Conversation", back_populates="messages", foreign_keys=[conversation_id])
+    reactions = relationship(
+        "MessageReaction",
+        back_populates="message",
+        cascade="all, delete-orphan"
+    )
+
+class MessageReaction(Base):
+    __tablename__ = "message_reactions"
+    id = Column(Integer, primary_key=True, index=True)
+    message_id = Column(Integer, ForeignKey("chat_messages.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    emoji = Column(String, nullable=False)
+    created_at = Column(DateTime, default=func.now())
+
+    # Ensure a user can only react with a given emoji once per message
+    __table_args__ = (UniqueConstraint('message_id', 'user_id', 'emoji', name='_message_user_emoji_uc'),)
+
+    message = relationship("ChatMessage", back_populates="reactions")
+    user = relationship("User") 
