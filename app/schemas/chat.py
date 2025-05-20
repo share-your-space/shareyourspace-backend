@@ -76,6 +76,8 @@ class ChatMessageBase(BaseModel):
     content: str
     created_at: datetime
     read_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    is_deleted: bool = False
     attachment_url: Optional[str] = None
     attachment_filename: Optional[str] = None
     attachment_mimetype: Optional[str] = None
@@ -88,6 +90,10 @@ class ChatMessageSchema(ChatMessageBase):
     model_config = {
         'from_attributes': True
     }
+
+# Schema for updating a message
+class ChatMessageUpdate(BaseModel):
+    content: str
 
 # Schema for representing a conversation in the list view for the frontend
 class ConversationInfo(BaseModel):

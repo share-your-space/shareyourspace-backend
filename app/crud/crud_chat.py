@@ -1,12 +1,13 @@
 from sqlalchemy import select, or_, and_, update, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload, contains_eager
+from datetime import datetime, timedelta, timezone # Ensure datetime and timedelta are imported
 
 from app.models.chat import ChatMessage, Conversation, ConversationParticipant, MessageReaction
 from app.models.user import User
-from app.schemas.chat import ChatMessageCreate, ConversationCreate
+from app.schemas.chat import ChatMessageCreate, ConversationCreate, ChatMessageUpdate
 from typing import List, Optional, Set
-from datetime import timezone # Add this import
+from app.core.config import settings # Import settings
 
 # Need crud_notification for creating notifications
 from app.crud import crud_notification
@@ -322,15 +323,94 @@ async def get_reactions_for_message(db, *, message_id: int):
     return result.scalars().all()
 
 async def get_chat_message_by_id(db: AsyncSession, *, message_id: int) -> ChatMessage | None:
-    stmt = (
+    """Fetches a specific chat message by its ID, eager loading sender, reactions, and conversation with its participants."""
+    statement = (
         select(ChatMessage)
         .where(ChatMessage.id == message_id)
         .options(
+            selectinload(ChatMessage.sender),
+            selectinload(ChatMessage.reactions),
             selectinload(ChatMessage.conversation).selectinload(Conversation.participants)
         )
     )
-    result = await db.execute(stmt)
+    result = await db.execute(statement)
     return result.scalars().first()
+
+async def update_message(
+    db: AsyncSession, *, message_id: int, current_user_id: int, new_content: str
+) -> ChatMessage | None:
+    """Updates a chat message if the user is the sender and it's within the edit window."""
+    message = await get_chat_message_by_id(db=db, message_id=message_id)
+
+    if not message:
+        return None # Message not found
+    
+    if message.sender_id != current_user_id:
+        return None # User is not the sender
+
+    if message.is_deleted:
+        return None # Message is already deleted
+
+    # Ensure created_at is offset-aware (UTC)
+    created_at_utc = message.created_at
+    if created_at_utc.tzinfo is None:
+        created_at_utc = created_at_utc.replace(tzinfo=timezone.utc)
+    else:
+        created_at_utc = created_at_utc.astimezone(timezone.utc)
+
+    # Current time in UTC
+    now_utc = datetime.now(timezone.utc)
+    
+    # Check if within the editable window
+    if now_utc > created_at_utc + timedelta(seconds=settings.MESSAGE_EDIT_DELETE_WINDOW_SECONDS):
+        return None # Past editable window
+
+    message.content = new_content
+    message.updated_at = now_utc
+    
+    db.add(message)
+    await db.commit()
+    await db.refresh(message, attribute_names=['sender', 'reactions'])
+    return message
+
+async def delete_message(
+    db: AsyncSession, *, message_id: int, current_user_id: int
+) -> ChatMessage | None:
+    """Soft deletes a chat message if the user is the sender and it's within the delete window."""
+    message = await get_chat_message_by_id(db=db, message_id=message_id)
+
+    if not message:
+        return None # Message not found
+
+    if message.sender_id != current_user_id:
+        return None # User is not the sender
+
+    if message.is_deleted:
+        return message # Already deleted, return current state
+
+    # Ensure created_at is offset-aware (UTC)
+    created_at_utc = message.created_at
+    if created_at_utc.tzinfo is None:
+        created_at_utc = created_at_utc.replace(tzinfo=timezone.utc)
+    else:
+        created_at_utc = created_at_utc.astimezone(timezone.utc)
+    
+    # Current time in UTC
+    now_utc = datetime.now(timezone.utc)
+
+    # Check if within the deletable window
+    if now_utc > created_at_utc + timedelta(seconds=settings.MESSAGE_EDIT_DELETE_WINDOW_SECONDS):
+        return None # Past deletable window
+
+    message.is_deleted = True
+    message.updated_at = now_utc # Mark when the deletion occurred
+    # Optionally, clear content for privacy, though frontend will handle display
+    # message.content = "This message was deleted."
+
+    db.add(message)
+    await db.commit()
+    await db.refresh(message, attribute_names=['sender', 'reactions'])
+    return message
 
 # Old get_conversation_messages - to be replaced or removed
 # async def get_conversation_messages(

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, Text, ForeignKey, DateTime, func, String, UniqueConstraint
+from sqlalchemy import Column, Integer, Text, ForeignKey, DateTime, func, String, UniqueConstraint, Boolean
 from sqlalchemy.orm import relationship
 
 from app.db.base_class import Base
@@ -42,6 +42,10 @@ class ChatMessage(Base):
     content = Column(Text, nullable=False)
     created_at = Column(DateTime, default=func.now())
     read_at = Column(DateTime, nullable=True)
+
+    # New fields for edit/delete
+    updated_at = Column(DateTime(timezone=True), nullable=True) # Stores timestamp of last edit
+    is_deleted = Column(Boolean, default=False, nullable=False) # Flag for soft deletion
 
     # Attachment fields
     attachment_url = Column(String, nullable=True)

@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     GCS_BUCKET_NAME: str
     TARGET_SERVICE_ACCOUNT_EMAIL: str | None = Field(None, validation_alias='TARGET_SERVICE_ACCOUNT_EMAIL')
     GOOGLE_APPLICATION_CREDENTIALS: Optional[str] = None # Path to service account key file (if not using ADC/impersonation)
+    MESSAGE_EDIT_DELETE_WINDOW_SECONDS: int = 300 # Default 5 minutes, time in seconds
 
     model_config = SettingsConfigDict(env_file='.env', extra='ignore')
 

@@ -6,7 +6,7 @@ import logging # Add logging
 from app import crud, models, schemas # schemas.chat will be used
 from app.db.session import get_db
 from app.security import get_current_active_user # Assuming this dependency exists
-from app.schemas.chat import MessageReactionCreate, MessageReactionResponse, MessageReactionsListResponse
+from app.schemas.chat import MessageReactionCreate, MessageReactionResponse, MessageReactionsListResponse, ChatMessageUpdate, ChatMessageSchema
 from app.socket_instance import sio # <--- IMPORT SIO FROM NEW LOCATION
 from app.schemas.notification import NotificationUpdate # Assuming this schema exists or we will create it
 from app.crud.crud_notification import mark_notifications_as_read_by_ref # Assuming this exists or we will create it
@@ -205,3 +205,104 @@ async def mark_conversation_as_read_endpoint(
 
     # If successful, return No Content (HTTP 204)
     return None 
+
+@router.put(
+    "/messages/{message_id}",
+    response_model=schemas.chat.ChatMessageSchema,
+    summary="Edit a Chat Message",
+    description="Allows the sender of a message to edit its content within a configured time window."
+)
+async def edit_chat_message(
+    message_id: int,
+    message_update: schemas.chat.ChatMessageUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    updated_message_orm = await crud.crud_chat.update_message(
+        db=db, 
+        message_id=message_id, 
+        current_user_id=current_user.id, 
+        new_content=message_update.content
+    )
+
+    if not updated_message_orm:
+        original_message = await crud.crud_chat.get_chat_message_by_id(db=db, message_id=message_id)
+        if not original_message:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+        if original_message.sender_id != current_user.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User cannot edit this message")
+        # Check if it was due to time window or other condition like already deleted
+        # This part can be more granular if needed, for now, a generic 403 if update fails for valid reasons
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Message cannot be edited (e.g., time window expired or already deleted)")
+
+    # Emit event to conversation participants
+    if updated_message_orm.conversation:
+        # The ORM object from crud.update_message should have conversation loaded or be None
+        # For safety, re-fetch if necessary, or ensure CRUD loads it if conversation_id exists
+        conversation_participants = updated_message_orm.conversation.participants
+        if not conversation_participants:
+            # If somehow participants are not loaded, fetch them
+            conv_with_participants = await db.get(models.Conversation, updated_message_orm.conversation_id, options=[selectinload(models.Conversation.participants)])
+            if conv_with_participants:
+                conversation_participants = conv_with_participants.participants
+
+        if conversation_participants:
+            updated_message_data = schemas.chat.ChatMessageSchema.model_validate(updated_message_orm).model_dump(mode='json')
+            for participant in conversation_participants:
+                logger.info(f"Emitting 'message_updated' to room: {str(participant.id)} for message {updated_message_orm.id}")
+                await sio.emit(
+                    "message_updated",
+                    data=updated_message_data,
+                    room=str(participant.id)
+                )
+
+    return updated_message_orm
+
+@router.delete(
+    "/messages/{message_id}",
+    response_model=schemas.chat.ChatMessageSchema, # Or a specific schema for deleted messages
+    summary="Delete a Chat Message",
+    description="Allows the sender of a message to soft-delete it within a configured time window."
+)
+async def delete_chat_message(
+    message_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    deleted_message_orm = await crud.crud_chat.delete_message(
+        db=db, 
+        message_id=message_id, 
+        current_user_id=current_user.id
+    )
+
+    if not deleted_message_orm:
+        # Similar error handling as edit
+        original_message = await crud.crud_chat.get_chat_message_by_id(db=db, message_id=message_id)
+        if not original_message:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+        if original_message.sender_id != current_user.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User cannot delete this message")
+        # If it was already deleted, the CRUD returns the message, so this path is for other denials like time window.
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Message cannot be deleted (e.g., time window expired)")
+    
+    # Emit event to conversation participants
+    if deleted_message_orm.conversation:
+        conversation_participants = deleted_message_orm.conversation.participants
+        if not conversation_participants:
+            conv_with_participants = await db.get(models.Conversation, deleted_message_orm.conversation_id, options=[selectinload(models.Conversation.participants)])
+            if conv_with_participants:
+                conversation_participants = conv_with_participants.participants
+        
+        if conversation_participants:
+            # For delete, we only need to send the ID and conversation_id usually
+            # But sending the full object with is_deleted=True is also fine and matches response_model
+            deleted_message_data = schemas.chat.ChatMessageSchema.model_validate(deleted_message_orm).model_dump(mode='json')
+            for participant in conversation_participants:
+                logger.info(f"Emitting 'message_deleted' to room: {str(participant.id)} for message {deleted_message_orm.id}")
+                await sio.emit(
+                    "message_deleted",
+                    data=deleted_message_data, # Or simpler: {"id": message_id, "conversation_id": deleted_message_orm.conversation_id}
+                    room=str(participant.id)
+                )
+
+    return deleted_message_orm 
