@@ -54,7 +54,10 @@ async def get_current_user(
     user = await crud.crud_user.get_user_by_id(
         db,
         user_id=token_data.user_id, 
-        options=[selectinload(models.User.profile)] # Eager load profile
+        options=[
+            selectinload(models.User.profile),
+            selectinload(models.User.startup)  # Eager load startup relationship
+            ]
     )
     if user is None:
         raise credentials_exception
@@ -67,3 +70,14 @@ async def get_current_active_user(
     if not current_user.is_active or current_user.status != 'ACTIVE':
         raise HTTPException(status_code=400, detail="Inactive user")
     return current_user 
+
+# New dependency for role-based access control
+def get_current_user_with_roles(required_roles: list[str]):
+    async def role_checker(current_user: models.User = Depends(get_current_active_user)) -> models.User:
+        if current_user.role not in required_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"User role '{current_user.role}' is not authorized for this endpoint. Required roles: {required_roles}"
+            )
+        return current_user
+    return role_checker 

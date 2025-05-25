@@ -2,10 +2,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import Select # Import Select for type hint
-from sqlalchemy.orm import Load # Import Load for type hint
+from sqlalchemy.orm import Load, selectinload # Import Load, selectinload for type hint
 import logging # Add logging import
 
 from app.models.user import User
+from app.models.space import WorkstationAssignment # Ensure WorkstationAssignment is imported
 from app.schemas.user import UserCreate, UserUpdateInternal
 from app.utils.security_utils import get_password_hash, verify_password
 from typing import List, Optional, Sequence # Import Sequence
@@ -112,6 +113,28 @@ async def get_users_by_status(db: AsyncSession, status: str) -> List[User]:
     result = await db.execute(select(User).filter(User.status == status))
     return result.scalars().all()
 
+async def get_users_by_role_and_startup(db: AsyncSession, *, role: str, startup_id: int) -> List[User]:
+    """Get a list of users filtered by their role and startup ID."""
+    stmt = select(User).where(User.role == role, User.startup_id == startup_id)
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+async def get_users_by_role_and_space_id(db: AsyncSession, *, role: str, space_id: int) -> List[User]:
+    """Get a list of users filtered by their role and space ID."""
+    stmt = select(User).where(User.role == role, User.space_id == space_id)
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+async def get_user_by_email_and_startup(db: AsyncSession, *, email: str, startup_id: int) -> Optional[User]:
+    """Fetch a single user by email if they belong to a specific startup."""
+    try:
+        stmt = select(User).where(User.email == email, User.startup_id == startup_id)
+        result = await db.execute(stmt)
+        return result.scalars().first()
+    except SQLAlchemyError as e:
+        logger.error(f"Database error fetching user by email {email} for startup {startup_id}: {e}")
+        return None
+
 async def activate_corporate_user(db: AsyncSession, *, user_id: int, space_id: Optional[int] = None) -> Optional[User]:
     """Activates a user with PENDING_ONBOARDING status to CORP_ADMIN and ACTIVE."""
     user = await get_user_by_id(db, user_id=user_id)
@@ -150,3 +173,44 @@ async def assign_user_to_space(db: AsyncSession, *, user_id: int, space_id: Opti
         await db.rollback()
         print(f"Database error assigning user to space: {e}")
         raise
+
+async def activate_user_for_startup_invitation(db: AsyncSession, *, user_to_activate: User) -> Optional[User]:
+    """Activates a user created via startup invitation and sets their status."""
+    if user_to_activate:
+        user_to_activate.is_active = True
+        user_to_activate.status = "ACTIVE" # Or UserStatus.ACTIVE if using enum
+        db.add(user_to_activate)
+        await db.commit()
+        await db.refresh(user_to_activate)
+        logger.info(f"User {user_to_activate.id} activated via startup invitation. Status: {user_to_activate.status}")
+        return user_to_activate
+    return None
+
+async def get_user_details_for_profile(db: AsyncSession, user_id: int) -> Optional[User]:
+    """
+    Fetches a user by ID with related details for their profile page.
+    Eager loads profile, company, startup, space (they belong to), 
+    managed_space (if Corp Admin), and active workstation assignment.
+    """
+    stmt = (
+        select(User)
+        .where(User.id == user_id)
+        .options(
+            selectinload(User.profile),
+            selectinload(User.company),
+            selectinload(User.startup),
+            selectinload(User.space), # Space the user belongs to
+            selectinload(User.managed_space), # Space the user manages (if Corp Admin)
+            selectinload(User.assignments).options( # Load assignments
+                selectinload(WorkstationAssignment.workstation) # And the related workstation for each assignment
+            )
+        )
+    )
+    result = await db.execute(stmt)
+    user = result.scalars().first()
+    return user
+
+# Note: Consider consolidating activation logic if rules become complex.
+# For example, a generic activate_user(user, new_status) might be useful.
+
+# user = CRUDUser(User) # This line seems to be for a CRUDBase pattern not fully used here yet

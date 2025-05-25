@@ -5,6 +5,7 @@ if TYPE_CHECKING:
     from .space import SpaceNode, Workstation # noqa: F401
     from .organization import Company, Startup # noqa: F401
     from .chat import Conversation # noqa: F401
+    from .space import WorkstationAssignment # Add this import for type hinting
 
 from app.db.base_class import Base
 from .profile import UserProfile
@@ -68,9 +69,8 @@ class User(Base):
         back_populates="users"
     )
 
-    # Relationship to the Workstation this user is assigned to
-    # Corresponds to `assigned_user = relationship("User", back_populates="assigned_workstation")` in Workstation
-    assigned_workstation = relationship("Workstation", back_populates="assigned_user", uselist=False)
+    # Relationship to WorkstationAssignments
+    assignments = relationship("WorkstationAssignment", back_populates="user", cascade="all, delete-orphan")
 
     # Define relationships for Company/Startup Admins/Members if needed
     # company = relationship("Company", back_populates="admin")

@@ -20,6 +20,15 @@ services:
       - ~/.config/gcloud/application_default_credentials.json:/root/.config/gcloud/application_default_credentials.json:ro
     env_file:
       - .env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://admin:changethis@db:5432/shareyourspacedb
+      - SECRET_KEY=your_super_secret_key_please_change_this_in_docker_compose
+      - GCS_BUCKET_NAME=your_gcs_bucket_name_please_change_this_in_docker_compose
+      # Add other required env vars from your config.py here if they don't have defaults
+      # For example, if TARGET_SERVICE_ACCOUNT_EMAIL is strictly required by your app logic:
+      # - TARGET_SERVICE_ACCOUNT_EMAIL=your_sa_email@example.com
+    dns:
+      - 8.8.8.8 # Added public DNS as a test
     depends_on:
       db:
         condition: service_healthy
@@ -29,9 +38,9 @@ services:
     image: pgvector/pgvector:pg16
     container_name: shareyourspace-backend-db-1
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-admin}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changethis}
-      POSTGRES_DB: ${POSTGRES_DB:-shareyourspacedb}
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: changethis
+      POSTGRES_DB: shareyourspacedb
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:

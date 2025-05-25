@@ -1,50 +1,48 @@
-import logging # Add logging
-import sys # Add sys
-import socketio # Add Socket.IO import
+import logging
+import sys
+import socketio
 
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware # Import CORS Middleware
-# Remove unused imports if AsyncSession/text/get_db are no longer needed directly here
-# from sqlalchemy.ext.asyncio import AsyncSession
-# from sqlalchemy import text
-# from app.db.session import get_db
+from fastapi.middleware.cors import CORSMiddleware
 
+# Corrected and simplified router imports
 from app.routers import (
-    auth, users, organizations, admin, matching, connections, notifications, chat, agent, uploads # Add agent and uploads
+    auth,
+    users,
+    organizations,
+    spaces,
+    connections,
+    notifications,
+    chat,
+    admin,
+    matching,
+    agent,
+    uploads,
+    member_requests,
+    invitations,
+    startup_actions
 )
+# Any other routers you have should also be in this tuple, e.g., 'profiles' if it's ready.
+# Make sure 'utils' is NOT here unless it's a valid, initialized router.
+
 from app.core.config import settings
-from app.socket_handlers import register_socketio_handlers # Import handler registration function
-from app.socket_instance import sio # <--- IMPORT SIO FROM NEW LOCATION
-from app.db.session import engine # If using synchronous engine for models creation
-from app.db import base_class # To create tables if not using Alembic or for initial setup
+from app.socket_handlers import register_socketio_handlers
+from app.socket_instance import sio
+# from app.db.session import engine # Only if used for create_all
+from app.db import base_class
 
 # --- Basic Logging Configuration ---
 logging.basicConfig(
-    level=logging.INFO, # Set the root logger level
+    level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
-        logging.StreamHandler(sys.stdout) # Log to stdout
+        logging.StreamHandler(sys.stdout)
     ]
 )
-# Set specific log levels for libraries if needed (optional)
-# logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING) 
-# logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
-# --- End Logging Configuration ---
 
-
-# Define allowed origins (adjust for production later)
-# For development, allow your frontend origin
-# This list will be used inside create_app
 origins = [
-    "http://localhost:3000", # Your frontend dev server
-    # Add your production frontend URL here later
-    # e.g., "https://your-frontend-domain.com"
+    "http://localhost:3000",
 ]
-
-# Remove initial app creation and configuration
-# app = FastAPI(...)
-# app.add_middleware(...)
-# app.include_router(...)
 
 def create_app() -> FastAPI:
     app = FastAPI(
@@ -54,28 +52,32 @@ def create_app() -> FastAPI:
         version="0.1.0"
     )
 
-    # Add CORS middleware using the defined origins list
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=origins, # Use the list defined above
+        allow_origins=origins,
         allow_credentials=True,
-        allow_methods=["*"], # Allows all methods (GET, POST, PUT, etc.)
-        allow_headers=["*"], # Allows all headers
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
 
-    # Include routers
+    # Include routers using the names from the import tuple
     app.include_router(auth.router, prefix=settings.API_V1_STR + "/auth", tags=["auth"])
     app.include_router(users.router, prefix=settings.API_V1_STR + "/users", tags=["users"])
     app.include_router(organizations.router, prefix=settings.API_V1_STR + "/organizations", tags=["organizations"])
     app.include_router(admin.router, prefix=settings.API_V1_STR + "/admin", tags=["admin"])
     app.include_router(matching.router, prefix=settings.API_V1_STR + "/matching", tags=["matching"])
-    app.include_router(connections.router, prefix=settings.API_V1_STR + "/connections", tags=["connections"]) # Add connections router
-    app.include_router(notifications.router, prefix=settings.API_V1_STR + "/notifications", tags=["notifications"]) # Add notifications router
-    app.include_router(chat.router, prefix=settings.API_V1_STR + "/chat", tags=["chat"]) # Include chat router
+    app.include_router(connections.router, prefix=settings.API_V1_STR + "/connections", tags=["connections"])
+    app.include_router(notifications.router, prefix=settings.API_V1_STR + "/notifications", tags=["notifications"])
+    app.include_router(chat.router, prefix=settings.API_V1_STR + "/chat", tags=["chat"])
     app.include_router(agent.router, prefix=settings.API_V1_STR + "/agent", tags=["agent"])
-    app.include_router(uploads.router, prefix=settings.API_V1_STR + "/uploads", tags=["uploads"]) # Added uploads router
+    app.include_router(uploads.router, prefix=settings.API_V1_STR + "/uploads", tags=["uploads"])
+    app.include_router(spaces.router, prefix=settings.API_V1_STR + "/spaces", tags=["spaces"])
+    # If you have a profiles router ready and it's in app.routers.__init__.py and the import tuple above:
+    # app.include_router(profiles.router, prefix=settings.API_V1_STR + "/profiles", tags=["profiles"])
+    app.include_router(member_requests.router, prefix=settings.API_V1_STR + "/member-requests", tags=["member-requests"])
+    app.include_router(invitations.router, prefix=settings.API_V1_STR + "/invitations", tags=["invitations"])
+    app.include_router(startup_actions.router, prefix=settings.API_V1_STR + "/startup-actions", tags=["startup-actions"])
 
-    # Simple health check endpoint
     @app.get("/health", tags=["health"])
     async def health_check():
         return {"status": "ok"}
@@ -86,26 +88,9 @@ def create_app() -> FastAPI:
 
     return app
 
-# Create the app instance using the factory function
-fastapi_app = create_app() # Rename to avoid conflict
+fastapi_app = create_app()
 
-# --- Socket.IO Server Setup ---
-# REMOVE OLD SIO DEFINITION:
-# sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*') 
+register_socketio_handlers(sio)
+app = socketio.ASGIApp(sio, other_asgi_app=fastapi_app)
 
-# Register event handlers defined in socket_handlers.py
-register_socketio_handlers(sio) # Uses the imported sio
-
-# Wrap FastAPI app with Socket.IO middleware
-app = socketio.ASGIApp(sio, other_asgi_app=fastapi_app) # Uses the imported sio
-# --- End Socket.IO Setup ---
-
-
-# Uvicorn will run this combined 'app' instance
-
-# Potentially create tables if they don't exist (useful for initial dev without Alembic always)
-# base_class.Base.metadata.create_all(bind=engine) # Comment out if Alembic is solely managing DB schema
-
-# TODO: Add Socket.IO integration here if not already done
-# from app.socket_handlers import sio
-# app.mount("/ws", socketio.ASGIApp(sio, app))
+# base_class.Base.metadata.create_all(bind=engine) # Usually for dev, ensure Alembic handles prod

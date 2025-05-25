@@ -124,4 +124,35 @@ async def mark_notifications_as_read_by_ref(
     count = result.rowcount
     if count > 0:
         logger.info(f"Marked {count} notifications of type '{notification_type}' as read for user {user_id} with reference '{reference}'")
-    return count 
+    return count
+
+async def get_notifications_by_type_for_user(
+    db: AsyncSession,
+    user_id: int,
+    notification_type: str,
+    is_read: bool | None = None, # Optional filter by read status
+    skip: int = 0,
+    limit: int = 100
+) -> List[Notification]:
+    stmt = (
+        select(Notification)
+        .where(Notification.user_id == user_id)
+        .where(Notification.type == notification_type)
+    )
+    if is_read is not None:
+        stmt = stmt.where(Notification.is_read == is_read)
+    
+    stmt = stmt.order_by(Notification.created_at.desc()).offset(skip).limit(limit)
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+async def mark_notification_as_read_by_id(db: AsyncSession, notification_id: int) -> Notification | None:
+    stmt = (
+        update(Notification)
+        .where(Notification.id == notification_id)
+        .values(is_read=True)
+        .returning(Notification)
+    )
+    result = await db.execute(stmt)
+    await db.commit()
+    return result.scalar_one_or_none() 

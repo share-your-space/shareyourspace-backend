@@ -48,11 +48,11 @@ async def update_profile(
     profile_text_parts = [
         db_obj.title or "",
         db_obj.bio or "",
-        " ".join(db_obj.skills_expertise) if db_obj.skills_expertise else "",
-        " ".join(db_obj.industry_focus) if db_obj.industry_focus else "", # Assuming industry_focus is also ARRAY(String)
+        " ".join(db_obj.skills_expertise) if db_obj.skills_expertise is not None and len(db_obj.skills_expertise) > 0 else "",
+        " ".join(db_obj.industry_focus) if db_obj.industry_focus is not None and len(db_obj.industry_focus) > 0 else "", # Assuming industry_focus is also ARRAY(String)
         db_obj.project_interests_goals or "",
-        " ".join(db_obj.collaboration_preferences) if db_obj.collaboration_preferences else "",
-        " ".join(db_obj.tools_technologies) if db_obj.tools_technologies else ""
+        " ".join(db_obj.collaboration_preferences) if db_obj.collaboration_preferences is not None and len(db_obj.collaboration_preferences) > 0 else "",
+        " ".join(db_obj.tools_technologies) if db_obj.tools_technologies is not None and len(db_obj.tools_technologies) > 0 else ""
     ]
     # Filter out empty strings before joining
     profile_text = " ".join(filter(None, profile_text_parts)).strip()
@@ -60,12 +60,17 @@ async def update_profile(
     if profile_text:
         logger.info(f"Generating embedding for user_id: {db_obj.user_id}")
         embedding = generate_embedding(profile_text)
-        if embedding:
-            # Log the type and length (or first few elements) of the embedding
-            logger.info(f"Generated embedding type: {type(embedding)}, length: {len(embedding)} for user_id: {db_obj.user_id}")
-            # logger.info(f"Generated embedding sample: {embedding[:5]} for user_id: {db_obj.user_id}") # Uncomment to log sample values
-            db_obj.profile_vector = embedding
-            logger.info(f"Embedding assigned successfully for user_id: {db_obj.user_id}") # Changed log message slightly
+        logger.info(f"Type of embedding from generate_embedding: {type(embedding)} for user_id: {db_obj.user_id}")
+
+        if embedding is not None:
+            logger.info(f"Generated embedding (is not None) for user_id: {db_obj.user_id}. Type: {type(embedding)}, Length: {len(embedding)}")
+            try:
+                db_obj.profile_vector = embedding
+                logger.info(f"Assigned embedding to db_obj.profile_vector. Type now: {type(db_obj.profile_vector)} for user_id: {db_obj.user_id}")
+            except Exception as e_assign:
+                logger.error(f"ERROR DURING ASSIGNMENT to db_obj.profile_vector for user_id {db_obj.user_id}: {e_assign}", exc_info=True)
+                raise e_assign # Re-raise to see it in seed script
+            logger.info(f"Embedding assigned successfully for user_id: {db_obj.user_id}")
         else:
             logger.warning(f"Embedding generation failed for user_id: {db_obj.user_id}. Setting profile_vector to None.")
             db_obj.profile_vector = None
@@ -75,8 +80,9 @@ async def update_profile(
 
     try:
         db.add(db_obj)
-        # Log the value right before commit
-        logger.info(f"Value of db_obj.profile_vector before commit: {db_obj.profile_vector is not None} (Type: {type(db_obj.profile_vector)}) for user_id: {db_obj.user_id}")
+        logger.info(f"Preparing to commit for user_id: {db_obj.user_id}. Current profile_vector type: {type(db_obj.profile_vector)}")
+        # logger.info(f"Value of db_obj.profile_vector before commit: {db_obj.profile_vector is not None} (Type: {type(db_obj.profile_vector)}) for user_id: {db_obj.user_id}")
+        logger.info(f"Type of db_obj.profile_vector before commit: {type(db_obj.profile_vector)} for user_id: {db_obj.user_id}") # Simplified logging
         logger.info(f"Attempting to commit profile changes for user_id: {db_obj.user_id}")
         await db.commit()
         logger.info(f"Commit successful for user_id: {db_obj.user_id}")
@@ -137,16 +143,20 @@ async def find_similar_users(
         .filter(User.id != user_id) # Filter out the user themselves
         .filter(User.status == 'ACTIVE') # Only match with active users
         .filter(UserProfile.profile_vector.is_not(None)) # Ensure target users have vectors
-        .filter(not_(exists(existing_connection_subquery))) # <-- Add filter to exclude existing connections
+        .filter(not_(exists(existing_connection_subquery))) # <-- Restore this filter
     )
 
     # Add filters to exclude users from the same company or startup, if applicable
     if company_id:
         stmt = stmt.filter(User.company_id != company_id)
-        logger.info(f"Excluding users from company_id={company_id}")
-    if startup_id:
-        stmt = stmt.filter(User.startup_id != startup_id)
-        logger.info(f"Excluding users from startup_id={startup_id}")
+        logger.info(f"Excluding users from company_id={company_id} for user_id={user_id}")
+    if startup_id: # If the requesting user belongs to a startup
+        # Exclude other users from the SAME startup.
+        # Users with no startup (startup_id IS NULL) should NOT be excluded by this.
+        stmt = stmt.filter(or_(User.startup_id.is_(None), User.startup_id != startup_id))
+        logger.info(f"Excluding users from startup_id={startup_id} (but allowing NULL startup_id) for user_id={user_id}")
+    # else: # Optional: if you want to log when the requesting user doesn't have a startup_id
+        # logger.info(f"Requesting user {user_id} does not have a startup_id, so no startup-based exclusion applied.")
 
     stmt = stmt.order_by(UserProfile.profile_vector.cosine_distance(embedding)).limit(limit)
 
@@ -154,7 +164,8 @@ async def find_similar_users(
     
     # Fetch all results as (UserProfile, distance) tuples
     similar_users_with_distance = results.fetchall()
-    logger.debug(f"Raw similar users found: {[(p.user_id, d) for p, d in similar_users_with_distance]}")
+    for profile_obj, dist in similar_users_with_distance:
+        logger.info(f"CRUD_USER_PROFILE: Candidate User ID: {profile_obj.user_id}, Distance: {dist}")
 
     logger.info(f"Found {len(similar_users_with_distance)} similar users for user_id={user_id}")
     return similar_users_with_distance # Return the list of tuples

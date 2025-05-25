@@ -23,8 +23,8 @@ class ConversationParticipant(Base):
     # New field to track when the user last read messages in this conversation
     last_read_at = Column(DateTime(timezone=True), nullable=True)
 
-    user = relationship("User")
-    conversation = relationship("Conversation")
+    user = relationship("User", overlaps="conversations,participants")
+    conversation = relationship("Conversation", overlaps="conversations,participants")
 
 
 class ChatMessage(Base):

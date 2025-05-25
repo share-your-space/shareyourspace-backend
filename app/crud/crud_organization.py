@@ -22,6 +22,15 @@ async def get_startup(db: AsyncSession, startup_id: int) -> Startup | None:
     result = await db.execute(select(Startup).filter(Startup.id == startup_id))
     return result.scalars().first()
 
+async def get_startups_by_space_id(db: AsyncSession, space_id: int) -> list[Startup]:
+    """Fetches all startups associated with a given space_id."""
+    result = await db.execute(
+        select(Startup)
+        .filter(Startup.space_id == space_id)
+        .order_by(Startup.name) # Optional: order by name
+    )
+    return result.scalars().all()
+
 # Add create_startup, update_startup later if needed
 
 # Potentially add get_company_by_admin_user, get_startup_by_admin_user later 

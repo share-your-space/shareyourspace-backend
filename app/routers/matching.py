@@ -75,9 +75,17 @@ async def discover_similar_users(
         logger.warning(f"User {current_user.id} is not assigned to a space.")
         raise HTTPException(status_code=400, detail="User not assigned to a space. Cannot discover connections.")
 
+    logger.info(f"ROUTER_MATCHING: Calling find_similar_users for user {current_user.id} in space {current_user.space_id}")
     similar_users_with_distance = await crud_user_profile.find_similar_users(
         db=db, requesting_user=current_user, limit=20
     )
+    logger.info(f"ROUTER_MATCHING: find_similar_users returned for user {current_user.id}. Count: {len(similar_users_with_distance)}")
+    if similar_users_with_distance:
+        # Log details of what was returned, e.g., user IDs and distances
+        returned_data_log = [(p.user_id, d) for p, d in similar_users_with_distance]
+        logger.info(f"ROUTER_MATCHING: Data from find_similar_users: {returned_data_log}")
+    else:
+        logger.info(f"ROUTER_MATCHING: find_similar_users returned an empty list.")
     
     if not similar_users_with_distance:
         logger.info(f"No initial similar users found for user_id={current_user.id}")

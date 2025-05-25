@@ -26,22 +26,40 @@ from app.db.base_class import Base
 from app.models.user import User
 from app.models.organization import Company, Startup
 from app.models.profile import UserProfile
-from app.models.space import SpaceNode, Workstation
+from app.models.space import SpaceNode, Workstation, WorkstationAssignment
 from app.models.connection import Connection
 from app.models.notification import Notification
 from app.models.verification_token import VerificationToken
 from app.models.password_reset_token import PasswordResetToken
+from app.models.invitation import Invitation # Ensure Invitation model is imported
 # --- End Model Imports ---
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
 
+# Check for an environment variable to use IP for Alembic
+ALEMBIC_USE_DB_IP = os.getenv("ALEMBIC_USE_DB_IP", "false").lower() == "true"
+# This IP was found using: docker network inspect shareyourspace-backend_default
+# It's the IP of the 'db' service on that network.
+DB_IP_ADDRESS = "172.18.0.2"
+
+db_url_str = str(settings.DATABASE_URL) # Get DATABASE_URL from Pydantic settings
+
+if ALEMBIC_USE_DB_IP:
+    print(f"ALEMBIC_INFO: ALEMBIC_USE_DB_IP is true. Original DB_URL: {db_url_str}")
+    if "@db:" in db_url_str: # Basic check for hostname 'db'
+        db_url_str = db_url_str.replace("@db:", f"@{DB_IP_ADDRESS}:")
+        print(f"ALEMBIC_INFO: Modified DB_URL for Alembic: {db_url_str}")
+    else:
+        print(f"ALEMBIC_WARNING: Could not find '@db:' in DB_URL to replace with IP. Using original: {db_url_str}")
+else:
+    print(f"ALEMBIC_INFO: ALEMBIC_USE_DB_IP is false or not set. Using original DB_URL: {db_url_str}")
+
 # Set the database URL directly in the config object from settings
 # This ensures commands like 'revision' use the correct, environment-aware URL
 # Convert Pydantic SecretStr to plain string if necessary
-db_url = str(settings.DATABASE_URL)
-config.set_main_option("sqlalchemy.url", db_url)
+config.set_main_option("sqlalchemy.url", db_url_str)
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
@@ -71,7 +89,7 @@ def run_migrations_offline() -> None:
     """
     # Use the DATABASE_URL from application settings
     context.configure(
-        url=db_url, # Use the db_url variable defined above
+        url=config.get_main_option("sqlalchemy.url"), # Use the potentially modified URL
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -101,7 +119,7 @@ async def run_migrations_online() -> None:
 
     # Create an async engine using the DATABASE_URL from settings
     connectable = create_async_engine(
-        db_url, # Use the db_url variable defined above
+        config.get_main_option("sqlalchemy.url"), # Use the potentially modified URL
         poolclass=pool.NullPool,
     )
 

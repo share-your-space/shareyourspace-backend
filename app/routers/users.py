@@ -1,19 +1,23 @@
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select # Add select
+from sqlalchemy.orm import selectinload # Add selectinload
 import uuid
 import datetime
 from fastapi.responses import StreamingResponse # Import StreamingResponse
 import io # Import io for streaming
 import logging # Import logging
 
-from app import models, security
-from app.schemas.user import User as UserSchema
+from app import models, security, crud # Ensure crud is imported
+from app.schemas.user import User as UserSchema, UserDetail as UserDetailSchema # Import UserDetailSchema
 # Import profile schemas and crud functions
 from app.schemas.user_profile import UserProfile as UserProfileSchema, UserProfileUpdate
 from app.crud import crud_user_profile
+from app.crud import crud_user # Add this line
 from app.db.session import get_db
 from app.utils import storage # Import storage utility
 from app.utils.embeddings import generate_embedding # Import embedding utility
+from app.models.space import WorkstationAssignment # Import WorkstationAssignment for type hint/logic
 
 router = APIRouter()
 logger = logging.getLogger(__name__) # Add logger
@@ -22,13 +26,40 @@ logger = logging.getLogger(__name__) # Add logger
 @router.get("/me", response_model=UserSchema)
 async def read_users_me(
     current_user: models.User = Depends(security.get_current_user),
+    db: AsyncSession = Depends(get_db) # Add db session
 ):
     """
     Fetch the details of the currently authenticated user.
+    Includes corporate_admin_id if applicable.
+    Also includes startup_id and space_id.
     Requires only a valid token, not necessarily ACTIVE status.
     """
     # The dependency already fetches and validates the user
-    return current_user
+    user_data = UserSchema.from_orm(current_user)
+    
+    # Explicitly set startup_id and space_id from the current_user model
+    # These should be direct attributes on the User model
+    user_data.startup_id = current_user.startup_id
+    user_data.space_id = current_user.space_id
+    
+    user_data.corporate_admin_id = None # Default to None
+
+    if current_user.space_id:
+        # Efficiently load the space relationship if not already loaded
+        # This depends on how current_user is loaded by get_current_user.
+        # If relationships are not typically loaded, an explicit load might be needed.
+        # However, for simplicity, we'll try direct access first.
+        # If current_user.space is not loaded, we'd need an async query.
+        
+        # Assuming current_user.space might not be loaded or to be safe:
+        stmt = select(models.SpaceNode).where(models.SpaceNode.id == current_user.space_id)
+        result = await db.execute(stmt)
+        space_node = result.scalar_one_or_none()
+
+        if space_node:
+            user_data.corporate_admin_id = space_node.corporate_admin_id
+            
+    return user_data
 
 @router.get("/me/profile", response_model=UserProfileSchema)
 async def read_my_profile(
@@ -252,5 +283,63 @@ async def read_user_profile(
     profile_data.profile_picture_signed_url = signed_url
 
     return profile_data
+
+@router.get(
+    "/{user_id}/detailed-profile", 
+    response_model=UserDetailSchema,
+    dependencies=[Depends(security.get_current_active_user)] # Or specific role if needed
+)
+async def read_user_detailed_profile(
+    user_id: int,
+    db: AsyncSession = Depends(get_db),
+    # current_user: models.User = Depends(security.get_current_active_user) # Can be used for permission checks
+):
+    """
+    Fetch a comprehensive, detailed profile of a specific user by their ID.
+    Includes profile, company, startup, space, managed space, and current workstation.
+    """
+    user_db = await crud_user.get_user_details_for_profile(db, user_id=user_id)
+    if not user_db:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    current_workstation_info_dict = None
+    if user_db.assignments:
+        active_assignment = next(
+            (a for a in user_db.assignments if a.end_date is None and a.workstation), 
+            None
+        )
+        if active_assignment and active_assignment.workstation:
+            # Ensure start_date exists on WorkstationAssignment model, default if not for safety.
+            start_date = getattr(active_assignment, 'start_date', datetime.datetime.utcnow()) 
+            current_workstation_info_dict = {
+                "workstation_id": active_assignment.workstation.id,
+                "workstation_name": active_assignment.workstation.name,
+                "assignment_start_date": start_date 
+            }
+
+    # Create the UserDetail object from the ORM model
+    # The `current_workstation` field will be populated from current_workstation_info_dict if provided
+    user_detail_data = UserDetailSchema.model_validate(
+        user_db, 
+        update={"current_workstation": current_workstation_info_dict} if current_workstation_info_dict else {}
+    )
+    
+    # If UserProfileSchema within UserDetailSchema needs to generate signed URLs,
+    # it should handle that upon its own instantiation from user_db.profile.
+    # Or, we can manually trigger it here if necessary.
+    if user_detail_data.profile and user_db.profile and user_db.profile.profile_picture_url and storage.GCS_BUCKET:
+        try:
+            blob = storage.GCS_BUCKET.blob(user_db.profile.profile_picture_url)
+            signed_url = blob.generate_signed_url(
+                version="v4",
+                expiration=datetime.timedelta(hours=1),
+                method="GET",
+            )
+            user_detail_data.profile.profile_picture_signed_url = signed_url
+        except Exception as e:
+            logger.error(f"Error generating signed URL for profile picture in detailed view for user {user_id}: {e}")
+            # Do not fail the request, profile_picture_signed_url will remain None or its default
+
+    return user_detail_data
 
 # Add other user-related endpoints here later (e.g., update profile) 
