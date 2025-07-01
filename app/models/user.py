@@ -1,15 +1,22 @@
-from sqlalchemy import Boolean, Column, Integer, String, DateTime, func, ForeignKey
+from sqlalchemy import Boolean, Column, Integer, String, DateTime, func, ForeignKey, Enum as SQLEnum
 from sqlalchemy.orm import relationship
 from typing import TYPE_CHECKING
+
 if TYPE_CHECKING:
-    from .space import SpaceNode, Workstation # noqa: F401
-    from .organization import Company, Startup # noqa: F401
-    from .chat import Conversation # noqa: F401
-    from .space import WorkstationAssignment # Add this import for type hinting
+    from .space import SpaceNode, Workstation, WorkstationAssignment
+    from .organization import Company, Startup
+    from .chat import Conversation
+    from .invitation import Invitation
+    from .referral import Referral
+    from .notification import Notification
+    from .interest import Interest
+    from .connection import Connection
+    from .verification_token import VerificationToken
+    from .password_reset_token import PasswordResetToken
+    from .profile import UserProfile
 
 from app.db.base_class import Base
-from .profile import UserProfile
-
+from .enums import UserRole, UserStatus
 
 class User(Base):
     __tablename__ = "users"
@@ -18,87 +25,46 @@ class User(Base):
     email = Column(String, unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
     full_name = Column(String, index=True, nullable=True)
-    # e.g., 'SYS_ADMIN', 'CORP_ADMIN', 'CORP_EMPLOYEE', 'STARTUP_ADMIN', 'STARTUP_MEMBER', 'FREELANCER'
-    role = Column(String, nullable=False)
-    # e.g., 'PENDING_VERIFICATION', 'WAITLISTED', 'PENDING_ONBOARDING', 'ACTIVE', 'SUSPENDED', 'BANNED'
-    status = Column(String, nullable=False, index=True)
+    role = Column(SQLEnum(UserRole), nullable=True)
+    status = Column(SQLEnum(UserStatus), nullable=False, index=True, default=UserStatus.PENDING_VERIFICATION)
     is_active = Column(Boolean, default=False)
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
-
-    # Added ForeignKeys and Relationships
     company_id = Column(Integer, ForeignKey("companies.id"), nullable=True)
     startup_id = Column(Integer, ForeignKey("startups.id"), nullable=True)
-
-    company = relationship("Company", back_populates="members")
-    startup = relationship("Startup", back_populates="members")
-
-    # One-to-one relationship to UserProfile
-    profile = relationship(
-        "app.models.profile.UserProfile", 
-        back_populates="user", 
-        uselist=False, 
-        cascade="all, delete-orphan",
-        remote_side=[UserProfile.user_id]
-    )
-
-    # Relationships for tokens (if they exist)
-    verification_tokens = relationship("VerificationToken", back_populates="user")
-    password_reset_tokens = relationship("PasswordResetToken", back_populates="user")
-
     space_id = Column(Integer, ForeignKey('spacenodes.id'), nullable=True, index=True)
-    # Temporarily removed until PromoCode model exists
-    # applied_promo_code_id = Column(Integer, ForeignKey('promocodes.id'), nullable=True)
+    referral_code = Column(String, unique=True, index=True, nullable=True)
+    community_badge = Column(String, nullable=True)
 
-    # Relationships
-    # Relationship to the SpaceNode this user manages (if they are a Corp Admin)
-    # Corresponds to `admin = relationship("User", back_populates="managed_space")` in SpaceNode
-    # Explicitly state the foreign key to resolve ambiguity
+    company = relationship("Company", back_populates="direct_employees")
+    startup = relationship("Startup", back_populates="direct_members")
+
+    profile = relationship("UserProfile", back_populates="user", uselist=False, cascade="all, delete-orphan")
+
+    verification_tokens = relationship("VerificationToken", back_populates="user", cascade="all, delete-orphan")
+    password_reset_tokens = relationship("PasswordResetToken", back_populates="user", cascade="all, delete-orphan")
+
     managed_space = relationship(
         "SpaceNode", 
-        foreign_keys="[SpaceNode.corporate_admin_id]", 
-        back_populates="admin", 
+        foreign_keys="app.models.space.SpaceNode.corporate_admin_id",
+        back_populates="corporate_admin", 
         uselist=False
     )
 
-    # Relationship to the SpaceNode this user BELONGS TO
-    # Uses the space_id foreign key on this User model
     space = relationship(
         "SpaceNode", 
         foreign_keys=[space_id],
         back_populates="users"
     )
 
-    # Relationship to WorkstationAssignments
     assignments = relationship("WorkstationAssignment", back_populates="user", cascade="all, delete-orphan")
+    sent_connections = relationship("Connection", foreign_keys="app.models.connection.Connection.requester_id", back_populates="requester", cascade="all, delete-orphan")
+    received_connections = relationship("Connection", foreign_keys="app.models.connection.Connection.recipient_id", back_populates="recipient", cascade="all, delete-orphan")
+    conversations = relationship("Conversation", secondary="conversation_participants", back_populates="participants")
+    referrals_made = relationship("Referral", foreign_keys="app.models.referral.Referral.referrer_id", back_populates="referrer", cascade="all, delete-orphan")
+    referral_received = relationship("Referral", foreign_keys="app.models.referral.Referral.referred_user_id", back_populates="referred_user", uselist=False, cascade="all, delete-orphan")
+    notifications = relationship("Notification", foreign_keys="app.models.notification.Notification.user_id", back_populates="user", cascade="all, delete-orphan")
+    interests = relationship("Interest", back_populates="user", cascade="all, delete-orphan")
 
-    # Define relationships for Company/Startup Admins/Members if needed
-    # company = relationship("Company", back_populates="admin")
-    # startup = relationship("Startup", back_populates="admin")
-    # member_of_company = relationship("Company", secondary="user_company_association", back_populates="members")
-    # member_of_startup = relationship("Startup", secondary="user_startup_association", back_populates="members")
-
-    # Placeholder for Verification/Reset Tokens relationships if needed for cascade delete etc.
-    # verification_tokens = relationship("VerificationToken", back_populates="user", cascade="all, delete-orphan")
-    # password_reset_tokens = relationship("PasswordResetToken", back_populates="user", cascade="all, delete-orphan")
-
-    # Relationships for Referrals
-    # referrals_made = relationship("Referral", foreign_keys="[Referral.referrer_id]", back_populates="referrer", cascade="all, delete-orphan")
-    # referral_received = relationship("Referral", foreign_keys="[Referral.referred_user_id]", back_populates="referred_user", uselist=False)
-
-    # Relationships for Blocks/Reports
-    # blocks_made = relationship("Block", foreign_keys="[Block.blocker_id]", back_populates="blocker", cascade="all, delete-orphan")
-    # blocks_received = relationship("Block", foreign_keys="[Block.blocked_user_id]", back_populates="blocked_user", cascade="all, delete-orphan")
-    # reports_made = relationship("Report", foreign_keys="[Report.reporter_id]", back_populates="reporter", cascade="all, delete-orphan")
-    # reports_received = relationship("Report", foreign_keys="[Report.reported_user_id]", back_populates="reported_user")
-
-    # Define relationships for connections
-    sent_connections = relationship("Connection", foreign_keys="Connection.requester_id", back_populates="requester")
-    received_connections = relationship("Connection", foreign_keys="Connection.recipient_id", back_populates="recipient")
-
-    # Relationship for Conversations (many-to-many via ConversationParticipant)
-    conversations = relationship(
-        "Conversation", # String name of the related model
-        secondary="conversation_participants", # Name of the association table
-        back_populates="participants" # Name of the relationship on the Conversation model
-    ) 
+    def __repr__(self):
+        return f"<User(id={self.id}, email='{self.email}')>" 

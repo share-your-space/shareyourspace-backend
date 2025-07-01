@@ -5,11 +5,12 @@ import logging # Add logging
 
 from app import crud, models, schemas # schemas.chat will be used
 from app.db.session import get_db
-from app.security import get_current_active_user # Assuming this dependency exists
+from app.security import get_current_active_user, get_current_user_for_chat # Assuming this dependency exists
 from app.schemas.chat import MessageReactionCreate, MessageReactionResponse, MessageReactionsListResponse, ChatMessageUpdate, ChatMessageSchema
 from app.socket_instance import sio # <--- IMPORT SIO FROM NEW LOCATION
 from app.schemas.notification import NotificationUpdate # Assuming this schema exists or we will create it
 from app.crud.crud_notification import mark_notifications_as_read_by_ref # Assuming this exists or we will create it
+from app.security import get_current_user_with_roles # Assuming this exists or we will create it
 
 router = APIRouter()
 logger = logging.getLogger(__name__) # Add logger instance
@@ -17,13 +18,13 @@ logger = logging.getLogger(__name__) # Add logger instance
 
 @router.get(
     "/conversations",
-    response_model=List[schemas.chat.ConversationInfo], # Changed to ConversationInfo
+    response_model=List[schemas.chat.ConversationForList], # USE ConversationForList
     summary="Get User's Conversations",
     description="Retrieves a list of conversations the current user is part of, ordered by the most recent message."
 )
 async def get_user_conversations_endpoint(
     db: AsyncSession = Depends(get_db),
-    current_user: models.User = Depends(get_current_active_user),
+    current_user: models.User = Depends(get_current_user_for_chat),
 ):
     """
     Retrieve conversations for the current user.
@@ -33,6 +34,52 @@ async def get_user_conversations_endpoint(
     # The CRUD function now returns a list of dicts that should match ConversationInfo structure
     # Pydantic will validate this structure upon return. No explicit model_validate loop needed if CRUD matches schema.
     return conversations_data
+
+
+@router.get(
+    "/conversations/{conversation_id}",
+    response_model=schemas.chat.ConversationSchema,
+    summary="Get a specific conversation by ID",
+    description="Retrieves details for a single conversation, if the user is a participant."
+)
+async def get_conversation_endpoint(
+    conversation_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_user_for_chat),
+):
+    conversation = await crud.crud_chat.get_conversation_by_id(
+        db=db, conversation_id=conversation_id, user_id=current_user.id
+    )
+    if not conversation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found or user is not a participant."
+        )
+    return conversation
+
+
+@router.get(
+    "/conversations/with/{other_user_id}",
+    response_model=schemas.chat.ConversationSchema,
+    summary="Get or create a conversation with a specific user",
+    description="Retrieves an existing conversation or creates a new one between the current user and the specified user."
+)
+async def get_or_create_conversation_with_user(
+    other_user_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_user_for_chat),
+):
+    other_user = await crud.crud_user.get_user_by_id(db, user_id=other_user_id)
+    if not other_user:
+        raise HTTPException(status_code=404, detail="Other user not found")
+
+    conversation = await crud.crud_chat.get_or_create_conversation(
+        db=db, user1_id=current_user.id, user2_id=other_user_id
+    )
+    if not conversation:
+        raise HTTPException(status_code=500, detail="Could not get or create conversation.")
+
+    return conversation
 
 
 @router.get(
@@ -46,7 +93,7 @@ async def get_messages_for_conversation_with_user(
     skip: int = Query(0, ge=0, description="Number of messages to skip"),
     limit: int = Query(100, ge=1, le=200, description="Maximum number of messages to return"),
     db: AsyncSession = Depends(get_db),
-    current_user: models.User = Depends(get_current_active_user),
+    current_user: models.User = Depends(get_current_user_for_chat),
 ):
     """
     Retrieve message history between the current user and `other_user_id`.
@@ -306,3 +353,26 @@ async def delete_chat_message(
                 )
 
     return deleted_message_orm 
+
+@router.post(
+    "/initiate-external",
+    response_model=schemas.chat.ConversationSchema,
+    dependencies=[Depends(get_current_user_with_roles(required_roles=["CORP_ADMIN"]))],
+)
+async def initiate_external_chat(
+    chat_in: schemas.chat.ExternalChatCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """
+    Initiate an external chat with a user.
+    """
+    recipient = await crud.crud_user.get_user_by_id(db, user_id=chat_in.recipient_id)
+    if not recipient:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recipient not found")
+
+    conversation_orm = await crud.crud_chat.get_or_create_conversation(
+        db, user1_id=current_user.id, user2_id=recipient.id, is_external=True
+    )
+
+    return conversation_orm 

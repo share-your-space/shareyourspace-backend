@@ -46,7 +46,7 @@ async def backfill_embeddings():
                 profile.title or "",
                 profile.bio or "",
                 " ".join(profile.skills_expertise or []),
-                profile.industry_focus or "",
+                " ".join(profile.industry_focus or []),
                 profile.project_interests_goals or "",
                 " ".join(profile.collaboration_preferences or []),
                 " ".join(profile.tools_technologies or [])

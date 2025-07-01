@@ -1,70 +1,66 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 import secrets
 from datetime import datetime, timedelta, timezone
 import logging
+from sqlalchemy.orm import selectinload
 
-# --- CRUD Imports ---
-import app.crud.crud_user as crud_user
-import app.crud.crud_verification_token as crud_verification_token
-import app.crud.crud_password_reset_token as crud_password_reset_token
-
-# --- Schema Imports ---
-import app.schemas.user as user_schemas
-import app.schemas.verification_token as verification_token_schemas
-import app.schemas.password_reset_token as password_reset_schemas
-
-# --- Model Imports ---
-from app.models.user import User
-from app.models.verification_token import VerificationToken
-from app.models.password_reset_token import PasswordResetToken
-
-# --- Other Imports ---
+from app import crud, models, schemas
 from app.db.session import get_db
 from app.utils.email import send_email
 from app.core.config import settings
-from app.utils.security_utils import verify_password
-from app import security
+from app.security import verify_password, create_access_token
+from app.models.enums import UserRole, UserStatus
+from app.schemas.token import Token, SetInitialPasswordRequest
+from app.schemas.registration import FreelancerCreate, StartupAdminCreate, CorporateAdminCreate
+from app.crud import crud_set_password_token, crud_user, crud_verification_token
+from app.security import get_password_hash
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-@router.post("/register", response_model=user_schemas.User, status_code=status.HTTP_201_CREATED)
-async def register_user(
-    user_in: user_schemas.UserCreate,
-    db: AsyncSession = Depends(get_db)
-):
-    """Register a new user and send verification email."""
-    existing_user = await crud_user.get_user_by_email(db, email=user_in.email)
+async def _register_user_and_send_verification(
+    db: AsyncSession,
+    user_in: schemas.user.UserCreate,
+    role: UserRole,
+    user_status: UserStatus,
+    company_id: int = None,
+    startup_id: int = None,
+) -> None:
+    """Helper function to create a user, send verification email, and handle errors."""
+    existing_user = await crud.crud_user.get_user_by_email(db, email=user_in.email)
     if existing_user:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered"
+            detail="Email already registered",
         )
 
     try:
-        # Create the user first
-        db_user = await crud_user.create_user(db=db, obj_in=user_in)
-
-        # Generate verification token
-        token = secrets.token_urlsafe(32)
-        expires_at = VerificationToken.get_default_expiry()
-        token_create = verification_token_schemas.VerificationTokenCreate(
-            user_id=db_user.id,
-            token=token,
-            expires_at=expires_at
+        user_create_data = user_in.model_copy(
+            update={
+                "role": role,
+                "status": user_status,
+                "company_id": company_id,
+                "startup_id": startup_id,
+            }
         )
-        await crud_verification_token.create_verification_token(db=db, obj_in=token_create)
+        db_user = await crud.crud_user.create_user(db=db, obj_in=user_create_data)
 
-        # Construct verification URL
-        verification_url = f"{settings.FRONTEND_URL}/auth/verify?token={token}"
+        token_str = secrets.token_urlsafe(32)
+        expires_at = models.verification_token.VerificationToken.get_default_expiry() 
+        token_create_schema = schemas.verification_token.VerificationTokenCreate(
+            user_id=db_user.id, token=token_str, expires_at=expires_at
+        )
+        await crud_verification_token.create_verification_token(
+            db=db, obj_in=token_create_schema
+        )
 
-        # Send verification email
+        verification_url = f"{settings.FRONTEND_URL}/auth/verify?token={token_str}"
         subject = "Verify Your ShareYourSpace Account"
         html_content = f"""
-        <p>Hi {db_user.full_name},</p>
+        <p>Hi {user_in.full_name},</p>
         <p>Thanks for registering for ShareYourSpace!</p>
         <p>Please click the link below to verify your email address:</p>
         <p><a href="{verification_url}">{verification_url}</a></p>
@@ -73,205 +69,209 @@ async def register_user(
         <p>Thanks,<br>The ShareYourSpace Team</p>
         """
         send_email(to=db_user.email, subject=subject, html_content=html_content)
-
-        # Return the created user, but status is still PENDING_VERIFICATION
-        return db_user
-
+        logger.info(f"Verification email sending process initiated for {db_user.email}.")
+        
+        return
     except Exception as e:
-        # Log the detailed error internally
-        print(f"Error during user registration or email sending: {e}") # Improve logging
-        # Consider rolling back user creation if email fails critically?
+        logger.error(f"Error during user registration for {user_in.email}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An error occurred during registration or sending the verification email."
+            detail="An error occurred during registration.",
         )
 
-@router.get("/verify-email", status_code=status.HTTP_200_OK)
-async def verify_email(
-    token: str = Query(...),
-    db: AsyncSession = Depends(get_db)
+@router.post("/register/freelancer", response_model=schemas.Message, status_code=status.HTTP_201_CREATED)
+async def register_freelancer(
+    user_in: FreelancerCreate, db: AsyncSession = Depends(get_db)
 ):
-    """Verify user's email using the provided token."""
-    db_token = await crud_verification_token.get_verification_token(db=db, token=token)
+    await _register_user_and_send_verification(
+        db=db,
+        user_in=user_in,
+        role=UserRole.FREELANCER,
+        user_status=UserStatus.PENDING_VERIFICATION,
+    )
+    return schemas.Message(message="Registration successful. Please check your email to verify your account.")
 
-    if not db_token or db_token.expires_at < datetime.now(timezone.utc):
-        await crud_verification_token.delete_verification_token(db=db, token_obj=db_token) # Clean up expired/invalid token
+@router.post("/register/corporate-admin", response_model=schemas.Message, status_code=status.HTTP_201_CREATED)
+async def register_corporate_admin(
+    admin_in: CorporateAdminCreate, db: AsyncSession = Depends(get_db)
+):
+    company = await crud.crud_organization.create_company(db=db, obj_in=admin_in.company_data)
+    await _register_user_and_send_verification(
+        db=db,
+        user_in=admin_in.user_data,
+        role=UserRole.CORP_ADMIN,
+        user_status=UserStatus.PENDING_VERIFICATION,
+        company_id=company.id,
+    )
+    return schemas.Message(message="Registration successful. Please check your email to verify your account.")
+
+@router.post("/register/startup-admin", response_model=schemas.Message, status_code=status.HTTP_201_CREATED)
+async def register_startup_admin(
+    admin_in: StartupAdminCreate, db: AsyncSession = Depends(get_db)
+):
+    startup = await crud.crud_organization.create_startup(db=db, obj_in=admin_in.startup_data)
+    await _register_user_and_send_verification(
+        db=db,
+        user_in=admin_in.user_data,
+        role=UserRole.STARTUP_ADMIN,
+        user_status=UserStatus.PENDING_VERIFICATION,
+        startup_id=startup.id,
+    )
+    return schemas.Message(message="Registration successful. Please check your email to verify your account.")
+
+@router.get("/verify-email", response_model=schemas.Message)
+async def verify_email_route(
+    token: str = Query(...), db: AsyncSession = Depends(get_db)
+):
+    db_verification_token = await crud_verification_token.get_verification_token(
+        db=db, token=token
+    )
+    if not db_verification_token or db_verification_token.expires_at < datetime.now(timezone.utc):
+        if db_verification_token:
+            await crud_verification_token.delete_verification_token(
+                db=db, token_obj=db_verification_token
+            )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid or expired verification token."
+            detail="Invalid or expired verification token.",
         )
-
-    user: User | None = await crud_user.get_user_by_id(db=db, user_id=db_token.user_id)
-    if not user:
-        # This case should ideally not happen if DB integrity is maintained
-        await crud_verification_token.delete_verification_token(db=db, token_obj=db_token)
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-
-    # Determine the next status based on role (We might not need to set status here anymore)
-    # next_status = ""
-    # if user.role in ["STARTUP_ADMIN", "STARTUP_MEMBER", "FREELANCER"]:
-    #     next_status = "WAITLISTED"
-    # elif user.role in ["CORP_ADMIN", "CORP_EMPLOYEE"]:
-    #     next_status = "PENDING_ONBOARDING"
-    # else:
-    #     next_status = "ACTIVE" # Default or for SYS_ADMIN if applicable
-
-    # Activate user if they are not already active
-    if not user.is_active: # Check if user is not active yet
-        # Set is_active to True upon successful verification
-        # We don't necessarily need to change the status here, 
-        # as it should have been set correctly during creation.
-        # If the status was somehow wrong, it should be fixed elsewhere.
-        # updated_user_data = user_schemas.UserUpdateInternal(status=user.status, is_active=True)
-        updated_user_data = user_schemas.UserUpdateInternal(is_active=True) # Just activate
+    user_to_verify = await crud_user.get_user_by_id(
+        db=db, user_id=db_verification_token.user_id
+    )
+    if not user_to_verify:
+        await crud_verification_token.delete_verification_token(
+            db=db, token_obj=db_verification_token
+        )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User associated with token not found.",
+        )
+    if not user_to_verify.is_active:
+        update_data = {"is_active": True}
         
-        logger.info(f"Attempting to activate user {user.id} (current status: {user.status}). Setting is_active=True.")
-        
-        try:
-            await crud_user.update_user_internal(db=db, db_obj=user, obj_in=updated_user_data)
-            # Re-fetch the user to ensure we have the latest state
-            user = await crud_user.get_user_by_id(db=db, user_id=db_token.user_id)
-            
-            if user:
-                 logger.info(f"User {user.id} state after activation: status={user.status}, is_active={user.is_active}")
+        if user_to_verify.status == UserStatus.PENDING_VERIFICATION:
+            if user_to_verify.role == UserRole.CORP_ADMIN:
+                update_data["status"] = UserStatus.ACTIVE
             else:
-                 # This case is highly unlikely if the update worked
-                 logger.error(f"User {db_token.user_id} not found after attempting activation update!")
-                 # Even if user not found after update, proceed to delete token
-        
-        except Exception as e:
-            logger.error(f"Error activating user {db_token.user_id}: {e}", exc_info=True)
-            # Decide if we should raise an HTTP exception or just log and continue to delete token
-            # For now, let's log and continue to prevent leaving tokens indefinitely
-            pass # Continue to token deletion even if update fails? Or re-raise? Let's continue for now.
+                update_data["status"] = UserStatus.WAITLISTED
 
+        update_payload = schemas.user.UserUpdateInternal(**update_data)
+        await crud_user.update_user_internal(
+            db=db, db_obj=user_to_verify, obj_in=update_payload
+        )
+    await crud_verification_token.delete_verification_token(
+        db=db, token_obj=db_verification_token
+    )
+    return schemas.Message(message="Email verified successfully. You can now log in.")
 
-    # Delete the used token (always do this if token was valid)
-    await crud_verification_token.delete_verification_token(db=db, token_obj=db_token)
-
-    # Return success message along with the user's role (fetch role from user obj if re-fetched)
-    final_role = user.role if user else "unknown" # Handle case where user might be None after failed update/refetch
-    return {"success": True, "message": "Email verified successfully!", "role": final_role}
-
-@router.post("/login")
-async def login_for_access_token(
-    db: AsyncSession = Depends(get_db),
-    form_data: OAuth2PasswordRequestForm = Depends()
+@router.post("/login", response_model=Token)
+async def login_for_access_token_route(
+    db: AsyncSession = Depends(get_db), form_data: OAuth2PasswordRequestForm = Depends()
 ):
-    """Authenticate user and return JWT access token."""
     user = await crud_user.get_user_by_email(db, email=form_data.username)
-    
-    # Check if user exists and password is correct
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-        
-    # Check if the user account is active (adjust based on your status logic)
-    # Example: Allow login only if ACTIVE, WAITLISTED, or PENDING_ONBOARDING?
-    # Or just check `is_active` boolean if using that.
-    # if user.status not in ["ACTIVE", "WAITLISTED", "PENDING_ONBOARDING"]:
-    if not user.is_active: # Assuming is_active is the primary check
+    if not user.is_active:
          raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Inactive user. Please verify your email or contact support.",
         )
-        
-    # Create the access token
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = security.create_access_token(
-        data={"sub": user.email, "user_id": user.id, "role": user.role},
-        expires_delta=access_token_expires
+    token_data = {"sub": user.email, "user_id": user.id, "role": user.role.value if user.role else None}
+    access_token = create_access_token(
+        data=token_data, expires_delta=access_token_expires
     )
-    
-    # Return the token in the response body (as expected by current frontend)
     return {"access_token": access_token, "token_type": "bearer"}
 
 @router.post("/request-password-reset", status_code=status.HTTP_200_OK)
-async def request_password_reset(
-    request_data: password_reset_schemas.RequestPasswordResetRequest,
+async def request_password_reset_route(
+    request_data: schemas.password_reset_token.RequestPasswordResetRequest,
     db: AsyncSession = Depends(get_db)
 ):
-    """Send a password reset email to the user if the email exists."""
-    user = await crud_user.get_user_by_email(db, email=request_data.email)
-    
-    # IMPORTANT: Always return success to prevent email enumeration attacks
+    user = await crud.crud_user.get_user_by_email(db, email=request_data.email)
     if user:
         try:
-            # Generate and store token
-            token = PasswordResetToken.generate_token()
-            expires_at = PasswordResetToken.get_default_expiry()
-            token_create = password_reset_schemas.PasswordResetTokenCreate(
+            token_str = models.password_reset_token.PasswordResetToken.generate_token()
+            expires_at = models.password_reset_token.PasswordResetToken.get_default_expiry()
+            token_create_schema = schemas.password_reset_token.PasswordResetTokenCreate(
                 user_id=user.id,
-                token=token,
+                token=token_str,
                 expires_at=expires_at
             )
-            await crud_password_reset_token.create_reset_token(db=db, obj_in=token_create)
+            await crud.crud_password_reset_token.create_reset_token(db=db, obj_in=token_create_schema)
             
-            # Construct reset URL
-            reset_url = f"{settings.FRONTEND_URL}/reset-password?token={token}"
-            
-            # Send email
+            reset_url = f"{settings.FRONTEND_URL}/reset-password?token={token_str}"
             subject = "Reset Your ShareYourSpace Password"
             html_content = f"""
             <p>Hi {user.full_name},</p>
-            <p>You requested a password reset for your ShareYourSpace account.</p>
-            <p>Please click the link below to set a new password:</p>
+            <p>You requested a password reset. Click the link below to set a new password:</p>
             <p><a href="{reset_url}">{reset_url}</a></p>
             <p>This link will expire in 1 hour.</p>
             <p>If you did not request a password reset, please ignore this email.</p>
             <p>Thanks,<br>The ShareYourSpace Team</p>
             """
-            # Consider running email sending in background task for responsiveness
             send_email(to=user.email, subject=subject, html_content=html_content)
-
         except Exception as e:
-            # Log the error but still return a generic success message to the client
-            print(f"Error processing password reset request for {request_data.email}: {e}")
-
-    # Return generic message regardless of whether the user was found or email sent
-    return {"message": "If an account exists for this email, a password reset link has been sent."}
+            logger.error(f"Error processing password reset for {request_data.email}: {e}", exc_info=True)
+    return {"message": "If an account with that email exists, a password reset link has been sent."}
 
 @router.post("/reset-password", status_code=status.HTTP_200_OK)
-async def reset_password(
-    request_data: password_reset_schemas.ResetPasswordRequest,
+async def reset_password_route(
+    request_data: schemas.password_reset_token.ResetPasswordRequest,
     db: AsyncSession = Depends(get_db)
 ):
-    """Reset the user's password using a valid token."""
-    token = request_data.token
-    new_password = request_data.new_password
-    
-    db_token = await crud_password_reset_token.get_reset_token_by_token(db=db, token=token)
-    
-    if not db_token or db_token.expires_at < datetime.now(timezone.utc):
-        await crud_password_reset_token.delete_reset_token(db=db, token_obj=db_token) # Clean up
+    db_reset_token = await crud.crud_password_reset_token.get_reset_token_by_token(db=db, token=request_data.token)
+    if not db_reset_token or db_reset_token.expires_at < datetime.now(timezone.utc):
+        if db_reset_token:
+            await crud.crud_password_reset_token.delete_reset_token(db=db, token_obj=db_reset_token)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid or expired password reset token."
         )
-        
-    user = await crud_user.get_user_by_id(db=db, user_id=db_token.user_id)
-    if not user:
-        await crud_password_reset_token.delete_reset_token(db=db, token_obj=db_token) # Clean up
+    user_to_reset = await crud.crud_user.get_user_by_id(db=db, user_id=db_reset_token.user_id)
+    if not user_to_reset:
+        await crud.crud_password_reset_token.delete_reset_token(db=db, token_obj=db_reset_token) 
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User associated with token not found.")
-        
+    await crud.crud_user.update_user_password(db=db, user=user_to_reset, new_password=request_data.new_password)
+    await crud.crud_password_reset_token.delete_reset_token(db=db, token_obj=db_reset_token)
+    return {"message": "Password has been reset successfully."}
+
+@router.post("/set-initial-password", response_model=schemas.Message)
+async def set_initial_password(
+    *, 
+    db: AsyncSession = Depends(get_db),
+    password_data: SetInitialPasswordRequest = Depends()
+):
+    token_str = password_data.token
+    new_password = password_data.new_password
+    db_token = await crud_set_password_token.get_set_password_token_by_token_string(db, token_string=token_str)
+    if not db_token:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired token.")
+    if await crud_set_password_token.is_set_password_token_expired(db_token):
+        await crud_set_password_token.use_set_password_token(db, db_token=db_token)
+        await db.commit()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Token has expired.")
+    user = await crud.user.get_user(db, user_id=db_token.user_id)
+    if not user:
+        await crud_set_password_token.use_set_password_token(db, db_token=db_token)
+        await db.commit()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found for this token.")
+    user.hashed_password = get_password_hash(new_password)
+    db.add(user)
+    await crud_set_password_token.use_set_password_token(db, db_token=db_token)
     try:
-        # Update user password
-        await crud_user.update_user_password(db=db, user=user, new_password=new_password)
-        
-        # Delete the used token
-        await crud_password_reset_token.delete_reset_token(db=db, token_obj=db_token)
-        
-        return {"message": "Password has been reset successfully."}
-        
+        await db.commit()
+        await db.refresh(user)
     except Exception as e:
-        print(f"Error during password reset for user {user.id}: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An error occurred while resetting the password."
-        )
+        await db.rollback()
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error committing set initial password for user {user.id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Could not set password due to a server error.")
+    return schemas.Message(message="Password has been set successfully. You can now log in.")
 
 # --- Add CRUD for VerificationToken --- #
 # (This assumes you create app/crud/crud_verification_token.py

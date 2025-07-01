@@ -6,6 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload # Added for potential eager loading if needed
+from sqlalchemy import func, text # Added text for direct SQL execution if needed
 
 # Make sure paths are correct for script execution
 import sys
@@ -17,11 +18,16 @@ from app.models.user import User
 from app.models.organization import Company, Startup # Import Company and Startup
 from app.models.space import SpaceNode, Workstation # Added SpaceNode, Workstation
 from app.schemas.space import WorkstationStatus # Added WorkstationStatus for workstation creation
-from app.utils.security_utils import get_password_hash
+from app.security import get_password_hash
 # Add imports for profile and embedding generation
 from app.crud import crud_user_profile # For updating profile and generating embeddings
 from app.schemas.user_profile import UserProfileUpdate # For profile update schema
 from app.models.profile import UserProfile # To create UserProfile object if needed
+from app.crud.crud_user_profile import get_profile_by_user_id, create_profile_for_user, update_profile
+from app.models.connection import Connection
+from app.models.space import WorkstationAssignment
+from app.models.notification import Notification
+from app.models.chat import ChatMessage, ConversationParticipant, Conversation
 
 # logging.basicConfig(level=logging.INFO) # Removed logging config
 # logger = logging.getLogger(__name__) # Removed logger instance
@@ -29,340 +35,444 @@ from app.models.profile import UserProfile # To create UserProfile object if nee
 faker = Faker()
 
 # Store credentials for easy output
-test_user_credentials = {}
+seeded_user_credentials = {}
+DEFAULT_PASSWORD = "Password123!"
 
-async def clear_specific_data(db: AsyncSession):
-    print("Clearing specific existing test data (Users, Startups, Companies, SpaceNodes, Workstations)...")
-    
-    # Order of deletion matters to avoid foreign key constraint errors
-    # Start with models that are referenced by others, or use cascade deletes if set up
+async def clear_all_data(db: AsyncSession):
+    """Clears all relevant data for a fresh seed, respecting deletion order."""
+    print("--- Clearing All Existing Test Data ---")
 
-    # If WorkstationAssignment exists and references users/workstations, clear it first.
-    # from app.models.space import WorkstationAssignment # Assuming this model exists
-    # await db.execute(WorkstationAssignment.__table__.delete()) 
-
-    await db.execute(Workstation.__table__.delete())
-    # Users who might be corporate_admin in SpaceNode or have space_id need careful handling
-    # Easiest might be to temporarily nullify FKs or delete dependent SpaceNodes first.
-    
-    # Nullify corporate_admin_id in SpaceNodes before deleting users to avoid FK violation
-    await db.execute(SpaceNode.__table__.update().values(corporate_admin_id=None))
-    await db.commit() # Commit this change first
-
-    # Nullify space_id and company_id and startup_id in Users
-    await db.execute(User.__table__.update().values(space_id=None, company_id=None, startup_id=None))
-    await db.commit() # Commit this change
-
-    await db.execute(SpaceNode.__table__.delete())
-    # Delete users, ensuring SYS_ADMIN is handled (e.g., by filtering or specific logic if it should persist)
-    # For a full reset, delete all users except perhaps a superuser if needed.
-    # Or, for specific test users, use their emails for targeted deletion.
-    # For now, deleting all users for a clean slate, assuming SYS_ADMIN will be recreated.
-    await db.execute(User.__table__.delete().where(User.email != "admin@shareyourspace.com")) # Keep SYS_ADMIN for now or recreate
-    await db.execute(Startup.__table__.delete())
-    await db.execute(Company.__table__.delete())
-    
+    # Order of deletion is critical to avoid foreign key constraint violations.
+    # Start with tables that are "at the edge" of the dependency graph.
+    print("Deleting junction/event tables...")
+    # await db.execute(text("DELETE FROM message_reactions CASCADE;")) # If exists
+    await db.execute(Notification.__table__.delete())
+    await db.execute(Connection.__table__.delete())
+    await db.execute(WorkstationAssignment.__table__.delete())
+    await db.execute(ChatMessage.__table__.delete())
+    await db.execute(ConversationParticipant.__table__.delete())
+    await db.execute(Conversation.__table__.delete())
     await db.commit()
-    print("Specific data cleared.")
 
+    # Clear UserProfile first as it has a FK to User
+    print("Deleting UserProfile data...")
+    await db.execute(UserProfile.__table__.delete())
+    await db.commit()
+
+    # Clear Workstations
+    print("Deleting Workstation data...")
+    await db.execute(Workstation.__table__.delete())
+    await db.commit()
+    
+    # Before deleting Users, nullify FKs in SpaceNode that point to User
+    print("Nullifying corporate_admin_id in SpaceNodes...")
+    await db.execute(SpaceNode.__table__.update().values(corporate_admin_id=None))
+    await db.commit()
+    
+    # Before deleting SpaceNodes, nullify space_id in Users table
+    print("Nullifying space_id in Users table...")
+    await db.execute(User.__table__.update().values(space_id=None))
+    await db.commit()
+
+    # Before deleting Users, nullify FKs in Startup that point to SpaceNode (if any direct, or handle via SpaceNode delete)
+    # For now, assuming Startup deletion will cascade or SpaceNode deletion is handled before Startup if issues arise.
+    # Similarly for Company.
+
+    # Delete SpaceNodes
+    print("Deleting SpaceNode data...")
+    await db.execute(SpaceNode.__table__.delete())
+    await db.commit()
+
+    # Now, attempt to delete users. If any other tables reference User directly and
+    # haven't been cleared or don't have CASCADE, this might fail.
+    # The `User` model has various relationships (company, startup, space_id).
+    # It's often easier to nullify these FKs on the User table before deleting the referenced entities
+    # or ensure the referenced entities are deleted first if the FK is on User.
+
+    # Let's try deleting Startups and Companies before Users who might reference them
+    print("Deleting Startup data...")
+    await db.execute(Startup.__table__.delete())
+    await db.commit()
+
+    print("Deleting Company data...")
+    await db.execute(Company.__table__.delete())
+    await db.commit()
+    
+    # Finally, delete Users
+    print("Deleting User data...")
+    await db.execute(User.__table__.delete())
+    await db.commit()
+    
+    print("--- All specific data cleared successfully. ---")
+
+
+async def create_user_with_profile(
+    db: AsyncSession,
+    email: str,
+    full_name: str,
+    role: str,
+    status: str,
+    is_active: bool,
+    company_id: int = None,
+    startup_id: int = None,
+    space_id: int = None,
+    profile_details: dict = None,
+):
+    """Creates a user, their profile, and generates embeddings."""
+    user = await db.scalar(select(User).filter(User.email == email))
+    if user:
+        print(f"User {email} already exists. Skipping creation.")
+        if email not in seeded_user_credentials:
+            seeded_user_credentials[email] = DEFAULT_PASSWORD
+        return user
+
+    user = User(
+        email=email,
+        hashed_password=get_password_hash(DEFAULT_PASSWORD),
+        full_name=full_name,
+        role=role,
+        status=status,
+        is_active=is_active,
+        company_id=company_id,
+        startup_id=startup_id,
+        space_id=space_id,
+    )
+    db.add(user)
+    await db.flush()  # Get user.id
+
+    print(f"Created User: {email} (Role: {role}, Status: {status})")
+    seeded_user_credentials[email] = DEFAULT_PASSWORD
+
+    # Create UserProfile
+    default_profile_details = {
+        "title": f"{role.replace('_', ' ').title()} at {faker.company() if role not in ['FREELANCER'] else 'Self-Employed'}",
+        "bio": faker.paragraph(nb_sentences=3),
+        "contact_info_visibility": "connections",
+        "skills_expertise": [faker.job() for _ in range(faker.random_int(min=2, max=5))],
+        "industry_focus": [faker.bs() for _ in range(faker.random_int(min=1, max=3))],
+        "project_interests_goals": faker.sentence(nb_words=10),
+        "collaboration_preferences": [faker.word() for _ in range(faker.random_int(min=1, max=3))],
+        "tools_technologies": [faker.word() for _ in range(faker.random_int(min=2, max=5))],
+        "linkedin_profile_url": f"https://linkedin.com/in/{email.split('@')[0]}"
+    }
+    if profile_details:
+        default_profile_details.update(profile_details)
+
+    profile_data = UserProfileUpdate(**default_profile_details)
+    
+    # This function should handle creating UserProfile if not exists and updating it, then generating embedding.
+    # It needs the user object.
+    try:
+        print(f"Ensuring profile exists and then updating for {user.email} to generate embedding...")
+        
+        # 1. Get or Create Profile Object
+        db_profile = await get_profile_by_user_id(db, user_id=user.id)
+        if not db_profile:
+            print(f"Profile not found for {user.email}, creating one.")
+            # Pass the user object, not just user.id, if create_profile_for_user expects the full object
+            db_profile = await create_profile_for_user(db, user=user) 
+            if not db_profile:
+                print(f"CRITICAL: Failed to create profile for {user.email}. Skipping embedding generation.")
+                # Decide on error handling: return user or raise exception
+                await db.flush() 
+                return user
+
+        # 2. Update the profile (which includes embedding generation)
+        # The existing `update_profile` function in crud_user_profile.py handles embedding.
+        updated_db_profile = await update_profile(db=db, db_obj=db_profile, obj_in=profile_data)
+        
+        if updated_db_profile and updated_db_profile.profile_vector is not None:
+            print(f"Successfully updated profile and generated embedding for {user.email}")
+        elif updated_db_profile:
+            print(f"Profile updated for {user.email}, but embedding might be missing (check logs from crud_user_profile).")
+        else:
+            print(f"Profile update or embedding generation failed for {user.email} (update_profile returned None).")
+
+    except Exception as e:
+        print(f"Error during profile/embedding generation for {user.email}: {e}")
+        # Decide if to rollback or continue; for seeding, we might want to continue other users.
+
+    await db.flush() # Ensure all changes for this user are flushed before moving to next
+    return user
 
 async def seed_data():
     async with AsyncSessionLocal() as db:
-        # It's often better to run this on a completely fresh DB (docker-compose down -v)
-        # But adding a clear function for more targeted resets if needed.
-        # await clear_specific_data(db) # Uncomment if you want the script to clear data
+        
+        # Option 1: Clear all data for a completely fresh seed
+        await clear_all_data(db)
+        
+        # Option 2: Comment out clear_all_data(db) if you want to add to existing data (less common for seeding)
 
-        print("Seeding initial data...")
-        test_user_credentials.clear() # Clear any previous credentials
+        print("--- Seeding Initial Platform Data ---")
+        seeded_user_credentials.clear()
 
-        # --- Seed SYS Admin (Essential) ---
-        sys_admin_email = "admin@shareyourspace.com"
-        sys_admin_password = "adminpassword"
-        existing_sys_admin = (await db.execute(select(User).filter(User.email == sys_admin_email))).scalars().first()
-        if not existing_sys_admin:
-            sys_admin = User(
-                email=sys_admin_email,
-                hashed_password=get_password_hash(sys_admin_password),
-                full_name="SYS Admin",
+        # 1. SYS Admin
+        print("\n--- Creating SYS Admin ---")
+        sys_admin_user = await create_user_with_profile(
+            db,
+            email="sys.admin@shareyourspace.com",
+            full_name="Platform SYS Admin",
                 role="SYS_ADMIN",
                 status="ACTIVE",
-                is_active=True
-            )
-            db.add(sys_admin)
-            print(f"Created SYS Admin: {sys_admin_email}, Password: {sys_admin_password}")
-            test_user_credentials[sys_admin_email] = sys_admin_password 
-        else:
-            print(f"SYS Admin {sys_admin_email} already exists.")
-            # Ensure password is known if admin already exists and we didn't set it here
-            if sys_admin_email not in test_user_credentials:
-                 test_user_credentials[sys_admin_email] = sys_admin_password # Store for output
+            is_active=True,
+            profile_details={"title": "Chief Platform Officer"}
+        )
 
-        # --- Seed Company: Pixida Group ---
-        pixida_company_name = "Pixida Group"
-        company_pixida = (await db.execute(select(Company).filter(Company.name == pixida_company_name))).scalars().first()
-        if not company_pixida:
-            company_pixida = Company(
-                name=pixida_company_name,
-                industry_focus="Automotive & Technology Consulting",
-                description="Driving digital transformation.",
-                website="https://www.pixida.com/"
+        # 2. Companies
+        print("\n--- Creating Companies ---")
+        company_syscorp = await db.scalar(select(Company).filter(Company.name == "SYSCorp Inc."))
+        if not company_syscorp:
+            company_syscorp = Company(
+                name="SYSCorp Inc.",
+                industry_focus="Global Technology Services",
+                description="Leading the future of enterprise solutions.",
+                website="https://syscorp.inc.example.com"
             )
-            db.add(company_pixida)
-            print(f"Created Company: {pixida_company_name}")
+            db.add(company_syscorp)
             await db.flush()
+            print(f"Created Company: {company_syscorp.name}")
         else:
-            print(f"Company {pixida_company_name} already exists.")
+            print(f"Company {company_syscorp.name} already exists.")
 
-        # --- Seed Startup: AI Innovations GmbH ---
-        ai_startup_name = "AI Innovations GmbH"
-        startup_ai = (await db.execute(select(Startup).filter(Startup.name == ai_startup_name))).scalars().first()
-        if not startup_ai:
-            startup_ai = Startup(
-                name=ai_startup_name,
-                industry_focus="Artificial Intelligence",
-                description="Developing cutting-edge AI solutions.",
-                mission="To democratize AI access.",
-                website="https://fake-ai-innovations.com"
+        company_innovate = await db.scalar(select(Company).filter(Company.name == "Innovate Solutions Ltd."))
+        if not company_innovate:
+            company_innovate = Company(
+                name="Innovate Solutions Ltd.",
+                industry_focus="Creative Digital Agency",
+                description="Crafting unique digital experiences.",
+                website="https://innovate.ltd.example.com"
             )
-            db.add(startup_ai)
-            print(f"Created Startup: {ai_startup_name}")
+            db.add(company_innovate)
             await db.flush()
+            print(f"Created Company: {company_innovate.name}")
         else:
-            print(f"Startup {ai_startup_name} already exists.")
+            print(f"Company {company_innovate.name} already exists.")
 
-        # --- Seed Startup: GreenTech Solutions ---
-        greentech_startup_name = "GreenTech Solutions"
-        startup_greentech = (await db.execute(select(Startup).filter(Startup.name == greentech_startup_name))).scalars().first()
-        if not startup_greentech:
-            startup_greentech = Startup(
-                name=greentech_startup_name,
-                industry_focus="Sustainability Tech",
-                description="Building a greener future with technology.",
-                website="https://fake-greentech.com"
-            )
-            db.add(startup_greentech)
-            print(f"Created Startup: {greentech_startup_name}")
-            await db.flush()
-        else:
-            print(f"Startup {greentech_startup_name} already exists.")
+        # 3. Corporate Admins
+        print("\n--- Creating Corporate Admins ---")
+        corp_admin_syscorp = await create_user_with_profile(
+            db,
+            email="corp.admin@syscorp.com",
+            full_name="Admin SYSCorp",
+                role="CORP_ADMIN",
+            status="ACTIVE", # This admin is active and will manage a space
+                is_active=True,
+            company_id=company_syscorp.id,
+            profile_details={"title": "Head of Operations, SYSCorp"}
+        )
 
+        corp_admin_innovate_pending = await create_user_with_profile(
+            db,
+            email="pending.admin@innovate.com",
+            full_name="Admin Innovate (Pending)",
+            role="CORP_ADMIN",
+            status="PENDING_ONBOARDING", # This admin needs SYS_ADMIN approval
+            is_active=True, # PENDING_ONBOARDING users are active as per backend logic
+            company_id=company_innovate.id,
+            profile_details={"title": "Director of Innovation, Innovate Solutions"}
+        )
 
-        # --- Define Test Users ---
-        users_to_create = [
-            {
-                "email": "corp.admin@pixida.com", "password": "Password123!", "full_name": "Corporate Admin Pat",
-                "role": "CORP_ADMIN", "status": "ACTIVE", "company": company_pixida, "startup": None
-            },
-            {
-                "email": "startup.admin@aiinnovations.com", "password": "Password123!", "full_name": "Startup Admin Sam",
-                "role": "STARTUP_ADMIN", "status": "ACTIVE", "company": None, "startup": startup_ai
-            },
-            {
-                "email": "startup.member@aiinnovations.com", "password": "Password123!", "full_name": "Startup Member Max",
-                "role": "STARTUP_MEMBER", "status": "ACTIVE", "company": None, "startup": startup_ai
-            },
-            {
-                "email": "freelancer.frank@example.com", "password": "Password123!", "full_name": "Freelancer Frank",
-                "role": "FREELANCER", "status": "ACTIVE", "company": None, "startup": None # Freelancers might not be tied to a startup initially
-            }
-        ]
-
-        created_users = {} # To store created user objects
-
-        for user_data in users_to_create:
-            existing_user = (await db.execute(select(User).filter(User.email == user_data["email"]))).scalars().first()
-            if not existing_user:
-                new_user = User(
-                    email=user_data["email"],
-                    hashed_password=get_password_hash(user_data["password"]),
-                    full_name=user_data["full_name"],
-                    role=user_data["role"],
-                    status=user_data["status"],
-                    is_active=True,
-                    company_id=user_data["company"].id if user_data["company"] else None,
-                    startup_id=user_data["startup"].id if user_data["startup"] else None
+        # 4. SpaceNodes & Workstations
+        print("\n--- Creating SpaceNodes & Workstations ---")
+        space_syscorp_alpha = None
+        if corp_admin_syscorp: # Ensure the admin was created
+            space_syscorp_alpha = await db.scalar(select(SpaceNode).filter(SpaceNode.name == "SYSCorp Hub Alpha"))
+            if not space_syscorp_alpha:
+                space_syscorp_alpha = SpaceNode(
+                    name="SYSCorp Hub Alpha",
+                    address=faker.address(),
+                    corporate_admin_id=corp_admin_syscorp.id,
+                    total_workstations=20,
+                    company_id=company_syscorp.id # Link space to the company
                 )
-                db.add(new_user)
-                await db.flush() # Get ID for new_user
-                created_users[user_data["email"]] = new_user
-                print(f"Created {user_data['role']}: {user_data['email']}, Password: {user_data['password']}")
-                test_user_credentials[user_data["email"]] = user_data["password"]
-            else:
-                created_users[user_data["email"]] = existing_user # Use existing if found
-                print(f"User {user_data['email']} already exists.")
-                if user_data["email"] not in test_user_credentials: # Store password if not already stored
-                    test_user_credentials[user_data["email"]] = user_data["password"]
+                db.add(space_syscorp_alpha)
+                await db.flush()
+                print(f"Created SpaceNode: {space_syscorp_alpha.name} managed by {corp_admin_syscorp.email}")
 
-            # --- Populate Profile and Generate Embedding ---
-            user_object_for_profile = created_users.get(user_data["email"])
-            if user_object_for_profile:
-                profile = await crud_user_profile.get_profile_by_user_id(db, user_id=user_object_for_profile.id)
-                if not profile:
-                    profile = await crud_user_profile.create_profile_for_user(db, user_id=user_object_for_profile.id)
-                    print(f"Created empty profile for user {user_object_for_profile.email}")
-
-                # Define profile data - make Corp Admin and Freelancer very similar to Startup Admin for testing
-                startup_admin_profile_template = {
-                    "bio": "A passionate professional working with a focus on driving innovation and collaboration in cutting-edge technology sectors.",
-                    "skills_expertise": ["Collaboration", "Communication", "Python", "FastAPI", "Docker", "React", "Management", "Strategy", "Operations", "AI", "Cloud Computing"],
-                    "industry_focus": ["Artificial Intelligence", "Technology", "Software Development"],
-                    "project_interests_goals": "Interested in projects related to AI, cloud solutions, and scalable web applications.",
-                    "collaboration_preferences": ["Remote Work", "Team Projects", "Agile Development"],
-                    "tools_technologies": ["Python", "FastAPI", "Docker", "React", "Kubernetes", "AWS", "GCP"]
-                }
-
-                if user_data["email"] == "corp.admin@pixida.com":
-                    profile_details = startup_admin_profile_template.copy()
-                    profile_details["title"] = "Corporate Admin at Pixida" # Keep title distinct
-                    profile_details["skills_expertise"].append("Corporate Governance") # Add one unique skill
-                    print(f"Seeding VERY SIMILAR profile for {user_data['email']}")
-                elif user_data["email"] == "freelancer.frank@example.com":
-                    profile_details = startup_admin_profile_template.copy()
-                    profile_details["title"] = "Independent Tech Consultant & Freelancer" # Keep title distinct
-                    profile_details["skills_expertise"].append("Client Management") # Add one unique skill
-                    print(f"Seeding VERY SIMILAR profile for {user_data['email']}")
-                elif user_data["email"] == "startup.admin@aiinnovations.com":
-                    profile_details = startup_admin_profile_template.copy()
-                    profile_details["title"] = "Startup Admin at AI Innovations GmbH"
-                    print(f"Seeding base profile for {user_data['email']}")
-                else: # For startup.member@aiinnovations.com or any others
-                    profile_details = {
-                        "title": f"{user_data['role'].replace('_', ' ').title()} at {user_data['startup'].name if user_data['startup'] else 'ShareYourSpace'}",
-                        "bio": f"A team member at {user_data['startup'].name if user_data['startup'] else 'the company'}.",
-                        "skills_expertise": ["Teamwork", "Communication", faker.job()],
-                        "industry_focus": [user_data['startup'].industry_focus if user_data['startup'] else "Technology"],
-                        "project_interests_goals": f"Contributing to projects at {user_data['startup'].name if user_data['startup'] else 'the company'}.",
-                        "collaboration_preferences": ["Team Projects"],
-                        "tools_technologies": ["Python", "React"]
-                    }
-                    print(f"Seeding generic member profile for {user_data['email']}")
-                
-                profile_update_schema = UserProfileUpdate(**profile_details)
-                print(f"PROFILE_UPDATE_SCHEMA for {user_data['email']}: {profile_update_schema.model_dump_json(indent=2)}") # Print the schema
-                
-                try:
-                    print(f"SEED.PY: ---- BEFORE CALLING update_profile for {user_object_for_profile.email} ----")
-                    updated_profile = await crud_user_profile.update_profile(
-                        db=db, 
-                        db_obj=profile, 
-                        obj_in=profile_update_schema
-                    )
-                    print(f"SEED.PY: ---- AFTER CALLING update_profile for {user_object_for_profile.email} ----")
-
-                    if updated_profile.profile_vector is not None: # Check if the attribute is not None
-                        print(f"Successfully generated and saved profile vector for {user_object_for_profile.email}.")
-                    else:
-                        print(f"Profile vector NOT generated for {user_object_for_profile.email} (check logs in crud_user_profile).\nPossible error during embedding generation or data too sparse.")
-                except Exception as e:
-                    print(f"Error updating profile/generating embedding for {user_object_for_profile.email}: {e}")
-                    # Add more detailed error logging if needed, e.g., import traceback; traceback.print_exc()
-            # --- End Profile Population ---
+                # Update Corp Admin's space_id (current assigned space, if they work there too)
+                # And their managed_space is implied by corporate_admin_id on SpaceNode
+                corp_admin_syscorp.space_id = space_syscorp_alpha.id
+                db.add(corp_admin_syscorp)
+                await db.flush()
 
 
-        # --- Seed SpaceNode: Pixida Munich Office ---
-        # Ensure the corp_admin_user is available
-        corp_admin_user_object = created_users.get("corp.admin@pixida.com")
-        if not corp_admin_user_object:
-            # This should not happen if user creation was successful
-            # Fetch from DB as a fallback if it existed previously and wasn't in created_users
-            corp_admin_user_object = (await db.execute(select(User).filter(User.email == "corp.admin@pixida.com"))).scalars().first()
-            if not corp_admin_user_object:
-                 print("Critical error: Corporate Admin user not found, cannot create SpaceNode correctly.")
-                 await db.rollback()
-                 return # Stop seeding
-
-        space_name = "Pixida Munich Central"
-        space_node = (await db.execute(select(SpaceNode).filter(SpaceNode.name == space_name))).scalars().first()
-        if not space_node:
-            space_node = SpaceNode(
-                name=space_name,
-                address="123 Tech Street, Munich",
-                company_id=company_pixida.id if company_pixida else None,
-                corporate_admin_id=corp_admin_user_object.id # Link to the Corp Admin
-            )
-            db.add(space_node)
-            await db.flush() # Get ID for space_node
-            print(f"Created SpaceNode: {space_name} managed by {corp_admin_user_object.email}")
-        else:
-            # If space exists, ensure its corporate_admin_id is correctly set (e.g. if script is re-run)
-            if space_node.corporate_admin_id != corp_admin_user_object.id:
-                space_node.corporate_admin_id = corp_admin_user_object.id
-                print(f"Updated SpaceNode {space_name} to be managed by {corp_admin_user_object.email}")
-            print(f"SpaceNode {space_name} already exists.")
-
-        # --- Assign Space to Users ---
-        # All defined test users (except SYS_ADMIN) will belong to this space
-        user_emails_for_space = [
-            "corp.admin@pixida.com", 
-            "startup.admin@aiinnovations.com",
-            "startup.member@aiinnovations.com",
-            "freelancer.frank@example.com"
-        ]
-        for email in user_emails_for_space:
-            user_to_update = created_users.get(email)
-            if user_to_update and space_node:
-                if user_to_update.space_id != space_node.id:
-                    user_to_update.space_id = space_node.id
-                    print(f"Assigned Space '{space_node.name}' to user {email}")
-            elif not user_to_update:
-                print(f"Warning: User {email} not found in created_users for space assignment.")
-            elif not space_node:
-                 print(f"Warning: SpaceNode not available for assigning to user {email}")
-
-
-        # --- Seed Workstations for the SpaceNode ---
-        if space_node:
-            num_workstations = 5
-            for i in range(1, num_workstations + 1):
-                workstation_name = f"Workstation {i:03}"
-                existing_workstation = (await db.execute(
-                    select(Workstation).filter(Workstation.name == workstation_name, Workstation.space_id == space_node.id)
-                )).scalars().first()
-                
-                if not existing_workstation:
+                for i in range(space_syscorp_alpha.total_workstations):
                     workstation = Workstation(
-                        name=workstation_name,
-                        space_id=space_node.id,
-                        status=WorkstationStatus.AVAILABLE # Default status
+                        name=f"Alpha-{101+i}",
+                        space_id=space_syscorp_alpha.id,
+                        status=WorkstationStatus.AVAILABLE if i % 3 != 0 else WorkstationStatus.MAINTENANCE # Mix status
                     )
                     db.add(workstation)
-                    print(f"Created Workstation: {workstation_name} in {space_node.name}")
-                else:
-                    print(f"Workstation {workstation_name} in {space_node.name} already exists.")
+                await db.flush()
+                print(f"Added {space_syscorp_alpha.total_workstations} workstations to {space_syscorp_alpha.name}")
+            else:
+                print(f"SpaceNode {space_syscorp_alpha.name} already exists.")
         else:
-            print("SpaceNode not available, skipping workstation creation.")
-        
-        # --- Remove old generic user seeding logic ---
-        # (The section with `user_data` list and faker.unique.email() has been replaced)
+            print("SYSCorp Admin not found, cannot create SYSCorp Hub Alpha.")
+            
+        # 5. Corporate Employees for SYSCorp Inc.
+        print("\n--- Creating Corporate Employees (SYSCorp Inc.) ---")
+        if company_syscorp and space_syscorp_alpha:
+            employee_active_syscorp = await create_user_with_profile(
+                db,
+                email="employee.active@syscorp.com",
+                full_name="Eva Employee (Active)",
+                role="CORP_EMPLOYEE",
+                status="ACTIVE",
+                is_active=True,
+                company_id=company_syscorp.id,
+                space_id=space_syscorp_alpha.id, # Assigned to the hub
+                profile_details={"title": "Senior Developer"}
+            )
+            employee_pending_syscorp = await create_user_with_profile(
+                db,
+                email="employee.pending@syscorp.com",
+                full_name="Paul Pending (Verification)",
+                role="CORP_EMPLOYEE",
+                status="PENDING_VERIFICATION",
+                is_active=False, # Not active until verified
+                company_id=company_syscorp.id,
+                # No space_id until active and assigned
+                profile_details={"title": "Junior Analyst"}
+            )
+        else:
+            print("SYSCorp company or space not available, skipping SYSCorp employee creation.")
 
-        try:
-            await db.commit()
-            print("\n--- Seeding Complete ---")
-            print("Created/Ensured the following test user credentials:")
-            for email, password in test_user_credentials.items():
-                print(f"  Email: {email}, Password: {password}")
-            print("--- Please save these credentials securely. ---")
+        # 6. Startups
+        print("\n--- Creating Startups ---")
+        startup_futuretech = None
+        if space_syscorp_alpha: # Assuming FutureTech AI is in SYSCorp Hub Alpha
+            startup_futuretech = await db.scalar(select(Startup).filter(Startup.name == "FutureTech AI"))
+            if not startup_futuretech:
+                startup_futuretech = Startup(
+                    name="FutureTech AI",
+                    industry_focus="AI Solutions",
+                    description="Pioneering next-gen AI applications.",
+                    mission="To make AI accessible and beneficial.",
+                    website="https://futuretech.ai.example.com",
+                    space_id=space_syscorp_alpha.id # Part of SYSCorp Hub Alpha
+                )
+                db.add(startup_futuretech)
+                await db.flush()
+                print(f"Created Startup: {startup_futuretech.name} in space {space_syscorp_alpha.name}")
+            else:
+                print(f"Startup {startup_futuretech.name} already exists.")
+        else:
+            print("SYSCorp Hub Alpha not available, cannot create FutureTech AI startup assigned to it.")
 
-        except IntegrityError as e: # Catch specific IntegrityError
-            await db.rollback()
-            print(f"Error during seeding commit (IntegrityError): {e.orig}") # .orig can give more DB-specific error info
-            print("This might be due to unique constraints or foreign key issues if data wasn't cleared properly or has unexpected existing IDs.")
-        except Exception as e:
-            await db.rollback()
-            print(f"Error during seeding commit: {e}")
+        startup_greengrow = await db.scalar(select(Startup).filter(Startup.name == "GreenGrow Ventures"))
+        if not startup_greengrow:
+            startup_greengrow = Startup(
+                name="GreenGrow Ventures",
+                industry_focus="Sustainable Technology",
+                description="Investing in a greener tomorrow.",
+                mission="To foster environmental innovation.",
+                website="https://greengrow.example.com"
+                # No space_id initially, they are waitlisted/independent
+            )
+            db.add(startup_greengrow)
+            await db.flush()
+            print(f"Created Startup: {startup_greengrow.name} (independent/waitlisted)")
+        else:
+            print(f"Startup {startup_greengrow.name} already exists.")
+
+        # 7. Startup Admins & Members
+        print("\n--- Creating Startup Admins & Members ---")
+        if startup_futuretech and space_syscorp_alpha:
+            sa_futuretech = await create_user_with_profile(
+                db,
+                email="admin@futuretech.ai",
+                full_name="Alex Admin (FutureTech)",
+                role="STARTUP_ADMIN",
+                status="ACTIVE",
+                is_active=True,
+                startup_id=startup_futuretech.id,
+                space_id=space_syscorp_alpha.id, # Active in the hub
+                profile_details={"title": "CEO, FutureTech AI"}
+            )
+            sm_active_futuretech = await create_user_with_profile(
+                db,
+                email="member.active@futuretech.ai",
+                full_name="Mia Member (FutureTech Active)",
+                role="STARTUP_MEMBER",
+                status="ACTIVE",
+                    is_active=True,
+                startup_id=startup_futuretech.id,
+                space_id=space_syscorp_alpha.id, # Active in the hub
+                profile_details={"title": "Lead Engineer, FutureTech AI"}
+            )
+            sm_waitlisted_futuretech = await create_user_with_profile(
+                db,
+                email="member.waitlisted@futuretech.ai",
+                full_name="Walter Waitlist (FutureTech)",
+                role="STARTUP_MEMBER",
+                status="WAITLISTED", # Needs approval for space access
+                is_active=True, # Email verified, but waitlisted for space
+                startup_id=startup_futuretech.id,
+                # No space_id yet
+                profile_details={"title": "Product Designer, FutureTech AI"}
+            )
+        else:
+            print("FutureTech AI startup or SYSCorp Hub Alpha not available, skipping FutureTech AI user creation.")
+
+        if startup_greengrow:
+            sa_greengrow_waitlisted = await create_user_with_profile(
+                db,
+                email="admin@greengrow.com",
+                full_name="Grace Admin (GreenGrow)",
+                role="STARTUP_ADMIN",
+                status="WAITLISTED", # Startup itself is waitlisted for a space
+                is_active=True, # Email verified
+                startup_id=startup_greengrow.id,
+                # No space_id yet
+                profile_details={"title": "Founder, GreenGrow Ventures"}
+            )
+        else:
+            print("GreenGrow Ventures startup not available, skipping GreenGrow admin creation.")
+
+        # 8. Freelancers
+        print("\n--- Creating Freelancers ---")
+        freelancer_active = await create_user_with_profile(
+            db,
+            email="freelancer.active@example.com",
+            full_name="Frank Freelancer (Active)",
+            role="FREELANCER",
+            status="ACTIVE",
+            is_active=True,
+            space_id=space_syscorp_alpha.id if space_syscorp_alpha else None, # Active in the hub
+            profile_details={"title": "UX Consultant", "skills_expertise": ["UX Design", "UI Prototyping", "User Research", "Figma"]}
+        )
+        freelancer_waitlisted = await create_user_with_profile(
+            db,
+            email="freelancer.waitlisted@example.com",
+            full_name="Wendy Waitlist (Freelancer)",
+            role="FREELANCER",
+            status="WAITLISTED",
+            is_active=True, # Email verified
+            profile_details={"title": "Content Strategist", "skills_expertise": ["SEO Writing", "Copywriting", "Content Marketing"]}
+        )
+        freelancer_pending_ver = await create_user_with_profile(
+            db,
+            email="freelancer.pending@example.com",
+            full_name="Peter Pending (Freelancer Verification)",
+            role="FREELANCER",
+            status="PENDING_VERIFICATION",
+            is_active=False,
+            profile_details={"title": "Backend Developer", "bio": "Awaiting email verification to join the platform."}
+        )
+
+        # Commit all pending changes
+        await db.commit()
+    print("\n--- Seeding Completed ---")
+
+    print("\n--- Seeded User Credentials (Password for all: Password123!) ---")
+    for email, password in seeded_user_credentials.items():
+        print(f"Email: {email}, Password: {password}")
 
 async def main():
-    # logger.info("Initializing DB session for seeding.") # Removed logger call
-    print("Initializing DB session for seeding.")
-    # db: AsyncSession = AsyncSessionLocal() # Session is managed within seed_data
-    try:
-        await seed_data()
-    finally:
-        # await db.close() # Session is managed within seed_data
-        if engine: # Ensure engine is not None before disposing
-            await engine.dispose()
-        # logger.info("DB session closed.") # Removed logger call
-        print("DB session closed and engine disposed.")
+    print("Starting database seed process...")
+    await seed_data()
+    print("Database seed process finished.")
 
 if __name__ == "__main__":
     # Important: For a truly clean seed, it's best to reset the database volume:
@@ -372,7 +482,7 @@ if __name__ == "__main__":
     # 4. poetry run alembic upgrade head (Apply migrations to the fresh DB)
     # 5. poetry run python scripts/seed.py (Run this script)
     #
-    # The `clear_specific_data` function is an alternative if you cannot do a full volume reset,
+    # The `clear_all_data` function is an alternative if you cannot do a full volume reset,
     # but it might be less reliable for complex schemas or if new relations are added without updating it.
 
     # print("Optional: Running DB migrations before seeding if you haven't done so...")

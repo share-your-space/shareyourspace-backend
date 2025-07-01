@@ -4,7 +4,7 @@ from pydantic import BaseModel
 import shutil # For saving file temporarily if needed, or getting filename/mimetype
 import uuid # For generating unique filenames
 
-from app.utils.storage import upload_file # Assuming this function exists and works
+from app.utils.storage import upload_file_to_gcs, generate_gcs_signed_url # MODIFIED: Import generate_gcs_signed_url
 from app.schemas.user import User # To get current user for path generation
 from app.dependencies import get_current_active_user # Assuming this dependency for auth
 
@@ -34,17 +34,26 @@ async def upload_chat_attachment(
 
     try:
         # The upload_file function is synchronous, call it in a thread pool
-        attachment_url = await run_in_threadpool(
-            upload_file, # The synchronous function to call
+        blob_name = await run_in_threadpool(
+            upload_file_to_gcs, # The synchronous function to call
             file=file,  # Arguments for upload_file
             destination_blob_name=destination_blob_name
         )
         
-        if not attachment_url:
-            raise HTTPException(status_code=500, detail="File upload failed, URL not returned.")
+        if not blob_name:
+            raise HTTPException(status_code=500, detail="File upload failed, blob name not returned.")
+
+        # Generate a signed URL for the uploaded blob
+        signed_url = await run_in_threadpool(generate_gcs_signed_url, blob_name=blob_name)
+
+        if not signed_url:
+            # Log this error, but potentially proceed with blob_name if client can construct public URL
+            # For now, consider it an error if signed URL can't be generated
+            print(f"Failed to generate signed URL for blob: {blob_name}") # Basic logging
+            raise HTTPException(status_code=500, detail="File uploaded but could not generate access URL.")
 
         return ChatAttachmentResponse(
-            attachment_url=attachment_url,
+            attachment_url=signed_url, # RETURN THE SIGNED URL
             original_filename=file.filename,
             content_type=file.content_type or "application/octet-stream",
             new_filename=unique_filename # Useful if client wants to store this too

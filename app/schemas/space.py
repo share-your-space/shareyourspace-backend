@@ -1,8 +1,27 @@
-from pydantic import BaseModel, EmailStr
-from typing import List, Optional, Union
+from __future__ import annotations
+from pydantic import BaseModel, EmailStr, Field
+from typing import List, Optional, Union, TYPE_CHECKING
 from enum import Enum
 from pydantic import ConfigDict
 from datetime import datetime
+
+from app.models.enums import UserRole, WorkstationStatus as WorkstationStatusEnum, UserStatus
+if TYPE_CHECKING:
+    from .user import User, BasicUser
+from .organization import Startup, BasicStartup
+
+class Space(BaseModel):
+    id: int
+    name: str
+    address: Optional[str] = None
+    corporate_admin_id: Optional[int] = None
+    company_id: Optional[int] = None
+    total_workstations: int = 0
+    workstations: List[WorkstationDetail]
+
+    model_config = ConfigDict(
+        from_attributes=True
+    )
 
 # Schemas for app.schemas.user.User, assuming it exists and has relevant fields like id, full_name, email, role
 # This is a simplified placeholder. You'd import your actual User schema.
@@ -36,7 +55,7 @@ class BasicSpace(BaseModel):
 
 class StartupTenantInfo(BaseModel):
     type: str = "startup"
-    details: BasicStartup
+    details: Startup
     member_count: int # Number of members from this startup in the admin's space
     # You might want to add a list of members here too, or a link to view them
 
@@ -64,11 +83,11 @@ class WorkstationAssignmentRequest(BaseModel):
     # end_date: Optional[date] = None
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 # Potentially a response schema for assignment, or just a success message
 class WorkstationAssignmentResponse(BaseModel):
-    assignment_id: int # Assuming an ID for the assignment itself
+    id: int # Changed from assignment_id to match the ORM model's PK
     user_id: int
     workstation_id: int
     space_id: int
@@ -76,11 +95,11 @@ class WorkstationAssignmentResponse(BaseModel):
     # end_date: Optional[date]
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 # Schema for detailed workstation info, including occupant
 class WorkstationTenantInfo(BaseModel):
-    user_id: int
+    user_id: int = Field(validation_alias='id')
     full_name: Optional[str]
     email: Optional[EmailStr]
     # Add any other relevant user details you want to show
@@ -97,7 +116,7 @@ class WorkstationDetail(BaseModel):
     occupant: Optional[WorkstationTenantInfo] = None # Details of the user occupying it
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class SpaceWorkstationListResponse(BaseModel):
     workstations: List[WorkstationDetail]
@@ -108,7 +127,17 @@ class WorkstationUnassignRequest(BaseModel):
     # assignment_id: int
 
     class Config:
-        orm_mode = True
+        from_attributes = True
+
+# New Schemas for Workstation CRUD by Corp Admin
+class WorkstationCreate(BaseModel):
+    name: str
+    status: Optional[WorkstationStatus] = WorkstationStatus.AVAILABLE
+
+class WorkstationUpdate(BaseModel):
+    name: Optional[str] = None
+    status: Optional[WorkstationStatus] = None
+# End New Schemas
 
 # Schema for detailed information about the managed space
 class ManagedSpaceDetail(BaseModel):
@@ -124,13 +153,13 @@ class ManagedSpaceDetail(BaseModel):
     company_id: Optional[int] = None # Company that owns/manages this space node
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class WorkstationStatusUpdateRequest(BaseModel):
-    status: WorkstationStatus # Use the existing Enum
+    status: WorkstationStatusEnum
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 # Schema for listing all users within a specific space
 class SpaceUsersListResponse(BaseModel):
@@ -142,8 +171,10 @@ class SpaceUsersListResponse(BaseModel):
 
 # New schema for connection statistics
 class SpaceConnectionStatsResponse(BaseModel):
-    total_connections: int
-    model_config = ConfigDict(from_attributes=True)
+    total_tenants: int
+    total_workstations: int
+    occupied_workstations: int
+    connections_this_month: int
 
 # Information about a user's current workstation assignment
 class UserWorkstationInfo(BaseModel):
@@ -151,4 +182,39 @@ class UserWorkstationInfo(BaseModel):
     workstation_name: str
     assignment_start_date: datetime # from WorkstationAssignment model
     # assignment_id: Optional[int] = None # If needed from WorkstationAssignment model
-    model_config = ConfigDict(from_attributes=True) 
+    model_config = ConfigDict(from_attributes=True)
+
+class AddUserToSpaceRequest(BaseModel):
+    user_id: int
+    role: UserRole
+    startup_id: Optional[int] = None
+
+class BrowseableSpace(BaseModel):
+    id: int
+    name: str
+    address: Optional[str] = None
+    company_name: str
+    company_id: Optional[int] = None
+    interest_status: str # 'interested' | 'not_interested' | 'unavailable'
+
+    class Config:
+        from_attributes = True
+
+class BrowseableSpaceListResponse(BaseModel):
+    spaces: List[BrowseableSpace]
+
+# Schemas for the response when a Corp Admin creates their first space
+class SpaceCreationUserResponse(BaseModel):
+    id: int
+    email: EmailStr
+    full_name: Optional[str] = None
+    role: Optional[UserRole] = None
+    status: UserStatus
+    company_id: Optional[int] = None
+    space_id: Optional[int] = None
+    
+    model_config = ConfigDict(from_attributes=True)
+
+class SpaceCreationResponse(BaseModel):
+    space: BasicSpace
+    user: SpaceCreationUserResponse

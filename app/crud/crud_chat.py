@@ -12,40 +12,83 @@ from app.core.config import settings # Import settings
 # Need crud_notification for creating notifications
 from app.crud import crud_notification
 import logging # Add logger
+from app.models.enums import NotificationType
 
 logger = logging.getLogger(__name__) # Add logger instance
 
 async def get_or_create_conversation(
-    db: AsyncSession, *, user1_id: int, user2_id: int
+    db: AsyncSession, *, user1_id: int, user2_id: int, is_external: bool = False
 ) -> Conversation:
-    """Gets an existing 1-on-1 conversation or creates a new one."""
+    """
+    Gets an existing 1-on-1 conversation or creates a new one.
+    Ensures that the returned conversation is fully loaded with participant profiles.
+    """
     # Ensure order for consistent lookup
     participant_ids_sorted = sorted([user1_id, user2_id])
 
     # Try to find an existing conversation with these exact two participants
-    # This query is a bit more complex because we need to match participants exactly.
     stmt = (
-        select(Conversation)
+        select(Conversation.id)
         .join(Conversation.participants)
         .group_by(Conversation.id)
-        .having(func.count(User.id) == 2) # Ensure exactly two participants
-        .having(func.bool_and(User.id.in_(participant_ids_sorted))) # Both users are in this conversation
+        .having(func.count(User.id) == 2)
+        .having(func.bool_and(User.id.in_(participant_ids_sorted)))
     )
     result = await db.execute(stmt)
-    conversation = result.scalars().first()
+    conversation_id = result.scalars().first()
 
-    if not conversation:
+    if not conversation_id:
         # Create new conversation
-        conversation = Conversation()
-        db.add(conversation)
-        await db.flush() # Ensure conversation.id is populated before use
+        new_conversation = Conversation(is_external=is_external)
+        db.add(new_conversation)
+        await db.flush()  # Ensure conversation.id is populated
+        conversation_id = new_conversation.id
+        
         # Add participants
-        user1_participant = ConversationParticipant(conversation_id=conversation.id, user_id=user1_id)
-        user2_participant = ConversationParticipant(conversation_id=conversation.id, user_id=user2_id)
+        user1_participant = ConversationParticipant(conversation_id=conversation_id, user_id=user1_id)
+        user2_participant = ConversationParticipant(conversation_id=conversation_id, user_id=user2_id)
         db.add_all([user1_participant, user2_participant])
         await db.commit()
-        await db.refresh(conversation, attribute_names=['participants'])
-    return conversation
+
+    # Eager load all necessary relationships before returning to prevent lazy loading issues
+    final_stmt = (
+        select(Conversation)
+        .where(Conversation.id == conversation_id)
+        .options(
+            selectinload(Conversation.participants).selectinload(User.profile),
+            selectinload(Conversation.participants).selectinload(User.company),
+            selectinload(Conversation.participants).selectinload(User.startup),
+            selectinload(Conversation.participants).selectinload(User.space),
+            selectinload(Conversation.participants).selectinload(User.managed_space),
+        )
+    )
+    result = await db.execute(final_stmt)
+    refreshed_conversation = result.scalar_one()
+
+    return refreshed_conversation
+
+async def get_conversations_between_users(
+    db: AsyncSession, *, user1_id: int, user2_id: int
+) -> List[Conversation]:
+    """Gets all conversations between two specific users."""
+    participant_ids = [user1_id, user2_id]
+    
+    # Subquery to get conversation_ids that have user1
+    subquery1 = select(ConversationParticipant.conversation_id).where(ConversationParticipant.user_id == user1_id)
+    
+    # Subquery to get conversation_ids that have user2
+    subquery2 = select(ConversationParticipant.conversation_id).where(ConversationParticipant.user_id == user2_id)
+
+    # Find conversations that are in both subqueries
+    stmt = (
+        select(Conversation)
+        .where(Conversation.id.in_(subquery1))
+        .where(Conversation.id.in_(subquery2))
+        .options(selectinload(Conversation.participants), selectinload(Conversation.messages))
+    )
+    
+    result = await db.execute(stmt)
+    return result.scalars().unique().all()
 
 async def create_message(
     db: AsyncSession, 
@@ -110,11 +153,11 @@ async def create_message(
                     await crud_notification.create_notification(
                         db=db,
                         user_id=participant_user_obj.id,
-                        type="new_chat_message",
+                        sender_id=sender_id,
+                        type=NotificationType.NEW_MESSAGE,
                         message=f"New message from {sender_name}",
                         reference=notification_ref,
-                        link=notification_link,
-                        related_entity_id=db_obj.id # ID of the chat message itself
+                        link=notification_link
                     )
                     logger.info(f"Created new_chat_message notification for offline user {participant_user_obj.id} regarding conversation {conversation_for_notification.id}")
                 except Exception as e:
@@ -152,20 +195,40 @@ async def get_user_conversations_with_details(db: AsyncSession, user_id: int) ->
         )
         # Ensure we only consider conversations the current user is in for the latest message context
         .join(ConversationParticipant, 
-              (ChatMessage.conversation_id == ConversationParticipant.conversation_id) & 
-              (ConversationParticipant.user_id == user_id)
+              (ChatMessage.conversation_id == ConversationParticipant.conversation_id) # Removed user_id filter here, will apply later
              )
         .group_by(ChatMessage.conversation_id)
         .subquery('latest_message_sq')
     )
 
+    # Subquery to count unread messages for the current user in each conversation
+    unread_count_subquery = (
+        select(
+            ConversationParticipant.conversation_id,
+            func.count(ChatMessage.id).label("unread_messages_count")
+        )
+        .join(ChatMessage, ChatMessage.conversation_id == ConversationParticipant.conversation_id)
+        .where(
+            ConversationParticipant.user_id == user_id,
+            ChatMessage.sender_id != user_id, # Message not from current user
+            or_(
+                ConversationParticipant.last_read_at == None, # User never read
+                ChatMessage.created_at > ConversationParticipant.last_read_at # Message is newer than last read
+            )
+        )
+        .group_by(ConversationParticipant.conversation_id)
+        .subquery('unread_count_sq')
+    )
+
     # Main statement to select Conversation, the actual last ChatMessage, 
     # and the current user's ConversationParticipant record for last_read_at
+    # Also include unread_count from the subquery
     stmt = (
         select(
             Conversation,
             ChatMessage,  # The last message object
-            ConversationParticipant  # The specific participant record for the current user
+            ConversationParticipant,  # The specific participant record for the current user
+            unread_count_subquery.c.unread_messages_count
         )
         .join(
             ConversationParticipant,
@@ -181,24 +244,29 @@ async def get_user_conversations_with_details(db: AsyncSession, user_id: int) ->
             (Conversation.id == ChatMessage.conversation_id) &
             (ChatMessage.created_at == latest_message_subquery.c.max_created_at)
         )
+        .outerjoin(
+            unread_count_subquery,
+            Conversation.id == unread_count_subquery.c.conversation_id
+        )
         .options(
-            selectinload(Conversation.participants), # Eager load all participants for "other_user" logic
-            # No need to selectinload current_user_participant_orm as it's directly selected
+            selectinload(Conversation.participants).selectinload(User.profile), # Eager load all participants AND THEIR PROFILES
         )
         .order_by(latest_message_subquery.c.max_created_at.desc().nulls_last(), Conversation.id)
     )
 
     result = await db.execute(stmt)
-    # result_tuples will contain (Conversation, ChatMessage (or None), ConversationParticipant)
+    # result_tuples will contain (Conversation, ChatMessage (or None), ConversationParticipant, unread_count (or None))
     result_tuples = result.unique().all()
 
     conversations_data = []
-    for conv_orm, last_msg_orm_from_query, current_user_participant_orm in result_tuples:
+    for conv_orm, last_msg_orm_from_query, current_user_participant_orm, unread_count in result_tuples:
         other_participant_user = next((p for p in conv_orm.participants if p.id != user_id), None)
         if not other_participant_user:
-            # This should ideally not happen if data is consistent
-            # (i.e., user is a participant and there's another participant)
+            logger.warning(f"Conversation {conv_orm.id} for user {user_id} is missing an other_participant. Skipping.")
             continue
+
+        # It's crucial that other_participant_user.profile is loaded for UserSimpleInfo schema to work
+        # The selectinload(Conversation.participants).selectinload(User.profile) should handle this.
 
         processed_last_message = None
         if last_msg_orm_from_query:
@@ -234,9 +302,11 @@ async def get_user_conversations_with_details(db: AsyncSession, user_id: int) ->
         
         conversations_data.append({
             "id": conv_orm.id,
-            "other_user": other_participant_user,
-            "last_message": processed_last_message,
-            "has_unread_messages": has_unread # Add the new field
+            "is_external": conv_orm.is_external,
+            "other_user": other_participant_user, # This is User ORM model instance
+            "last_message": processed_last_message, # This is ChatMessage ORM model instance or None
+            "has_unread_messages": has_unread, 
+            "unread_count": unread_count or 0 # Use the count from subquery, default to 0
         })
 
     return conversations_data
@@ -452,3 +522,21 @@ async def delete_message(
 #     result = await db.execute(statement)
 #     await db.commit()
 #     return result.rowcount 
+
+async def get_conversation_by_id(db: AsyncSession, *, conversation_id: int, user_id: int) -> Optional[Conversation]:
+    """
+    Gets a conversation by its ID, ensuring the user is a participant.
+    """
+    stmt = (
+        select(Conversation)
+        .join(Conversation.participants)
+        .where(Conversation.id == conversation_id)
+        .where(User.id == user_id) # Check for participation
+        .options(
+            selectinload(Conversation.participants).selectinload(User.profile),
+            selectinload(Conversation.messages),
+            selectinload(Conversation.last_message),
+        )
+    )
+    result = await db.execute(stmt)
+    return result.scalars().first() 

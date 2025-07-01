@@ -2,6 +2,7 @@ from typing import Any, Dict, Generic, List, Optional, Type, TypeVar, Union
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select # For SQLAlchemy 2.0 style selects
 
 from app.db.base_class import Base # Your SQLAlchemy declarative base
@@ -43,26 +44,26 @@ class CRUDBase(Generic[ModelType, CreateSchemaType, UpdateSchemaType]):
 
     async def update(
         self,
-        db: Session,
+        db: AsyncSession,
         *,
         db_obj: ModelType,
         obj_in: Union[UpdateSchemaType, Dict[str, Any]]
     ) -> ModelType:
-        obj_data = jsonable_encoder(db_obj)
         if isinstance(obj_in, dict):
             update_data = obj_in
         else:
-            update_data = obj_in.model_dump(exclude_unset=True) # Use model_dump for Pydantic v2
-        for field in obj_data:
-            if field in update_data:
-                setattr(db_obj, field, update_data[field])
+            update_data = obj_in.model_dump(exclude_unset=True)
+        
+        for field, value in update_data.items():
+            setattr(db_obj, field, value)
+
         db.add(db_obj)
         await db.commit()
         await db.refresh(db_obj)
         return db_obj
 
-    async def remove(self, db: Session, *, id: Any) -> Optional[ModelType]: # Changed to return Optional[ModelType]
-        obj = await self.get(db, id=id) # Use await for async get
+    async def remove(self, db: AsyncSession, *, id: int) -> ModelType:
+        obj = await db.get(self.model, id)
         if obj:
             await db.delete(obj)
             await db.commit()

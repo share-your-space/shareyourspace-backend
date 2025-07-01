@@ -1,5 +1,6 @@
 from sqlalchemy import Column, Integer, Text, ForeignKey, DateTime, func, String, UniqueConstraint, Boolean
 from sqlalchemy.orm import relationship
+from sqlalchemy.sql import text
 
 from app.db.base_class import Base
 # Assuming User model is in app.models.user
@@ -11,6 +12,7 @@ class Conversation(Base):
     __tablename__ = "conversations"
     id = Column(Integer, primary_key=True, index=True)
     created_at = Column(DateTime, default=func.now())
+    is_external = Column(Boolean, default=False, server_default=text("false"), nullable=False)
     # participants relationship (many-to-many via ConversationParticipant)
     participants = relationship("User", secondary="conversation_participants", back_populates="conversations")
     messages = relationship("ChatMessage", back_populates="conversation", order_by="ChatMessage.created_at")

@@ -1,9 +1,21 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, EmailStr
 from datetime import datetime
 from typing import Optional
 
 # Import User schema for nesting
-from .user import User
+# from .user import User
+from app.models.enums import ConnectionStatus # Import the enum
+
+# NEW: UserReference schema for concise user details in connection lists
+class UserReference(BaseModel):
+    id: int # Renamed from user_id to id to match ORM model
+    full_name: Optional[str] = None
+    title: Optional[str] = None
+    profile_picture_signed_url: Optional[str] = None # Expecting a signed URL or public URL
+
+    model_config = {
+        "from_attributes": True # Allow ORM mode
+    }
 
 # Shared properties
 class ConnectionBase(BaseModel):
@@ -15,7 +27,7 @@ class ConnectionCreate(ConnectionBase):
 
 # Properties to receive via API on update (e.g., changing status)
 class ConnectionUpdate(BaseModel):
-    status: str # Expecting 'accepted', 'declined', 'blocked'?
+    status: ConnectionStatus # Use the ConnectionStatus enum
 
 # Properties stored in DB
 class ConnectionInDBBase(ConnectionBase):
@@ -31,8 +43,8 @@ class ConnectionInDBBase(ConnectionBase):
 
 # Properties to return to client
 class Connection(ConnectionInDBBase):
-    requester: User # Add nested User object for the requester
-    recipient: User # Add nested User object for the recipient
+    requester: UserReference # UPDATED to UserReference
+    recipient: UserReference # UPDATED to UserReference
 
 # Additional schema for representing a connection with user details (optional)
 # from .user import User as UserSchema # Import User schema

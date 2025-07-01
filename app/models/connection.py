@@ -4,13 +4,14 @@ from sqlalchemy.orm import relationship
 
 from app.db.base_class import Base
 from app.models.user import User # Import User for relationships
+from app.models.enums import ConnectionStatus # Import from centralized enums
 
-# Define the ConnectionStatus Enum
-class ConnectionStatus(str, enum.Enum):
-    PENDING = "pending"
-    ACCEPTED = "accepted"
-    DECLINED = "declined"
-    BLOCKED = "blocked"
+# Define the ConnectionStatus Enum - REMOVE THIS LOCAL DEFINITION
+# class ConnectionStatus(str, enum.Enum):
+#     PENDING = "pending"
+#     ACCEPTED = "accepted"
+#     DECLINED = "declined"
+#     BLOCKED = "blocked"
 
 class Connection(Base):
     __tablename__ = "connections"

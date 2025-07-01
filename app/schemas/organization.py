@@ -1,73 +1,116 @@
-from pydantic import BaseModel, HttpUrl, ConfigDict
-from typing import Optional
+from __future__ import annotations
+from typing import Optional, List, Any, Literal, TYPE_CHECKING
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 from datetime import datetime
 
-# Shared properties
-class OrganizationBase(BaseModel):
-    name: str
-    logo_url: Optional[HttpUrl] = None
-    industry_focus: Optional[str] = None
-    description: Optional[str] = None
-    website: Optional[HttpUrl] = None
+from app.models.enums import TeamSize, StartupStage, UserStatus, UserRole
+from .common import UserSimpleInfo
 
-# Properties to receive on creation (if needed later)
+if TYPE_CHECKING:
+    from .user import User
+
+# --- Base Schemas ---
+class OrganizationBase(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    logo_url: Optional[str] = None
+    industry_focus: Optional[str] = Field(None, max_length=100)
+    description: Optional[str] = Field(None, max_length=5000)
+    website: Optional[str] = None
+    team_size: Optional[str] = None
+    looking_for: Optional[List[str]] = []
+    social_media_links: Optional[dict[str, str]] = {}
+
+# --- Company Schemas ---
 class CompanyCreate(OrganizationBase):
     pass
 
-class StartupCreate(OrganizationBase):
-    mission: Optional[str] = None
+class CompanyUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    logo_url: Optional[str] = None
+    industry_focus: Optional[str] = Field(None, max_length=100)
+    description: Optional[str] = Field(None, max_length=5000)
+    website: Optional[str] = None
+    team_size: Optional[TeamSize] = None
+    looking_for: Optional[List[str]] = None
+    social_media_links: Optional[dict[str, str]] = None
 
-# Properties to receive on update (if needed later)
-class CompanyUpdate(OrganizationBase):
-    pass
-
-class StartupUpdate(OrganizationBase):
-    mission: Optional[str] = None
-
-# Properties shared by models stored in DB
-class OrganizationInDBBase(OrganizationBase):
+class Company(OrganizationBase):
     id: int
     created_at: datetime
-    updated_at: Optional[datetime] = None
+    updated_at: datetime
+    admin: Optional[UserSimpleInfo] = None
 
-    model_config = ConfigDict(
-        from_attributes=True
-    )
+    model_config = ConfigDict(from_attributes=True)
 
-# Properties to return to client
-class Company(OrganizationInDBBase):
-    pass
 
-class Startup(OrganizationInDBBase):
+# --- Startup Schemas ---
+class StartupCreate(OrganizationBase):
+    mission: Optional[str] = Field(None, max_length=1000)
+    stage: Optional[str] = None
+    pitch_deck_url: Optional[str] = None
+
+class StartupUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    logo_url: Optional[str] = None
+    industry_focus: Optional[str] = Field(None, max_length=100)
+    description: Optional[str] = Field(None, max_length=5000)
+    website: Optional[str] = None
+    team_size: Optional[TeamSize] = None
+    looking_for: Optional[List[str]] = None
+    social_media_links: Optional[dict[str, str]] = None
+    mission: Optional[str] = Field(None, max_length=1000)
+    stage: Optional[str] = None
+    pitch_deck_url: Optional[str] = None
+    member_slots_allocated: Optional[int] = None
+
+class Startup(OrganizationBase):
+    id: int
     mission: Optional[str] = None
+    stage: Optional[str] = None
+    pitch_deck_url: Optional[str] = None
+    status: UserStatus
+    created_at: datetime
+    updated_at: datetime
+    member_slots_allocated: Optional[int] = 0
+    member_slots_used: int = 0
+    direct_members: List[UserSimpleInfo] = []
 
-# Properties stored in DB
-class CompanyInDB(OrganizationInDBBase):
-    pass
+    @computed_field
+    @property
+    def admin(self) -> Optional[UserSimpleInfo]:
+        for member in self.direct_members:
+            if member.role == UserRole.STARTUP_ADMIN:
+                return member
+        return None
 
-class StartupInDB(OrganizationInDBBase):
-    mission: Optional[str] = None
+    model_config = ConfigDict(from_attributes=True)
 
-# Basic Company Information
+# --- Other Schemas ---
 class BasicCompany(BaseModel):
     id: int
     name: str
+    logo_url: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
 
-# Basic Startup Information (e.g., for dropdowns or lists)
 class BasicStartup(BaseModel):
     id: int
     name: str
+    logo_url: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
 
-# Schema for requesting to add a new member
 class MemberRequestCreate(BaseModel):
-    email: str # For now, just email. Could expand to full_name, etc.
-    # Add any other details you want the Startup Admin to provide
-    # e.g., proposed_role: Optional[str] = None
+    email: str
 
-# Schema for the response after requesting a member
 class MemberRequestResponse(BaseModel):
     message: str
     notification_sent_to_admin_id: Optional[int] = None
-    requested_email: str 
+    requested_email: str
+
+class OrganizationSearchResult(BaseModel):
+    id: int
+    name: str
+    type: str
+
+class InvitationRequest(BaseModel):
+    organization_id: int
+    organization_type: str # 'company' or 'startup' 

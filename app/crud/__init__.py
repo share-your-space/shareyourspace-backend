@@ -7,11 +7,12 @@ from . import crud_space # noqa
 from . import crud_connection # noqa: Import connection CRUD
 from . import crud_notification # noqa: Import notification CRUD
 from . import crud_chat # noqa: Import chat CRUD
+from . import crud_interest # noqa
 from .crud_invitation import invitation # Make invitation instance directly available on crud package
 
 # Add other CRUD modules here as they are created 
 
-from .crud_space import create_space, get_space, get_spaces
+from .crud_space import create_space, get_space_by_id, get_spaces
 
 # Remove the block re-importing user functions
 # from .crud_user import (
@@ -23,6 +24,20 @@ from .crud_space import create_space, get_space, get_spaces
 #     get_users_by_status,
 #     activate_corporate_user
 # ) 
+
+from .crud_verification_token import (
+    create_verification_token,
+    get_verification_token,
+    delete_verification_token,
+    delete_verification_token_by_token
+)
+from .crud_set_password_token import (
+    create_set_password_token,
+    get_set_password_token_by_token_string,
+    get_set_password_token_by_user_id,
+    use_set_password_token,
+    is_set_password_token_expired
+)
 
 __all__ = [
     "user", 
@@ -38,7 +53,16 @@ __all__ = [
     "skill",
     "user_profile_skill_link",
     "password_reset_token",
-    "verification_token",
+    "create_verification_token",
+    "get_verification_token",
+    "delete_verification_token",
+    "delete_verification_token_by_token",
+    "create_set_password_token",
+    "get_set_password_token_by_token_string",
+    "get_set_password_token_by_user_id",
+    "use_set_password_token",
+    "is_set_password_token_expired",
+    "get_password_reset_token_by_token_string",
     "message",
     "chat_room",
     "chat_room_member",
@@ -46,4 +70,5 @@ __all__ = [
     "connection",
     "connection_request",
     "invitation",
+    "interest",
 ] 

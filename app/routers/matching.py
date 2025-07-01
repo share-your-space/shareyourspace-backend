@@ -2,12 +2,15 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional, Tuple
 import logging
+import datetime
 
 from app import models, schemas, crud
 from app.crud import crud_user_profile
+from app.crud import crud_interest
 from app.schemas.matching import MatchResult
 from app.db.session import get_db
 from app.security import get_current_active_user
+from app.utils import storage
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +21,7 @@ VECTOR_WEIGHT = 0.7
 STRUCTURED_WEIGHT = 0.3
 SHARED_SKILL_SCORE = 5
 SHARED_INDUSTRY_SCORE = 3
+INTEREST_BOOST_SCORE = 25 # A significant boost for expressing interest
 
 
 def calculate_structured_score(
@@ -57,27 +61,41 @@ async def discover_similar_users(
     Discover users with similar profiles within the same space.
     Calculates a combined score based on vector similarity and structured data.
     Returns a ranked list with match reasons.
+    Excludes users already connected to the current user.
     """
     logger.info(f"Discover endpoint called by user_id={current_user.id}")
 
     if not current_user.profile:
         profile = await crud_user_profile.get_profile_by_user_id(db, user_id=current_user.id)
         if not profile:
-             logger.error(f"User {current_user.id} has no profile object. Cannot perform discovery.")
-             raise HTTPException(status_code=404, detail="User profile not found. Please complete your profile.")
+            logger.error(f"User {current_user.id} has no profile object. Cannot perform discovery.")
+            return [MatchResult(message="Your profile is incomplete. Please fill out your profile to discover other users.")]
         current_user.profile = profile
         
     if current_user.profile.profile_vector is None:
         logger.warning(f"User {current_user.id} profile has no embedding vector.")
-        raise HTTPException(status_code=400, detail="Profile embedding not generated yet. Try updating your profile.")
+        return [MatchResult(message="Your profile is missing key information. Please complete your profile to enable discovery.")]
         
-    if current_user.space_id is None:
-        logger.warning(f"User {current_user.id} is not assigned to a space.")
-        raise HTTPException(status_code=400, detail="User not assigned to a space. Cannot discover connections.")
+    if not current_user.space_id and not current_user.managed_space:
+        logger.warning(f"User {current_user.id} is not assigned to a space and does not manage one. Returning empty list for discovery.")
+        return []
 
-    logger.info(f"ROUTER_MATCHING: Calling find_similar_users for user {current_user.id} in space {current_user.space_id}")
+    # Get IDs of users already connected to the current user
+    connected_connections = await crud.crud_connection.get_accepted_connections_for_user(db=db, user_id=current_user.id)
+    exclude_user_ids = [conn.requester_id if conn.recipient_id == current_user.id else conn.recipient_id for conn in connected_connections]
+    logger.info(f"User {current_user.id} is already connected with user IDs: {exclude_user_ids}")
+
+    # --- Interest Boost Logic ---
+    interested_user_ids = set()
+    if current_user.role == 'CORP_ADMIN' and current_user.managed_space:
+        interests = await crud_interest.interest.get_interests_for_space(db, space_id=current_user.managed_space.id)
+        interested_user_ids = {interest.user_id for interest in interests if interest.status == 'PENDING'}
+        logger.info(f"Corp Admin {current_user.id} is discovering. Found {len(interested_user_ids)} users interested in their space.")
+    # --- End Interest Boost ---
+
+    logger.info(f"ROUTER_MATCHING: Calling find_similar_users for user {current_user.id} in space {current_user.space_id or current_user.managed_space.id}")
     similar_users_with_distance = await crud_user_profile.find_similar_users(
-        db=db, requesting_user=current_user, limit=20
+        db=db, requesting_user=current_user, limit=20, exclude_user_ids=exclude_user_ids
     )
     logger.info(f"ROUTER_MATCHING: find_similar_users returned for user {current_user.id}. Count: {len(similar_users_with_distance)}")
     if similar_users_with_distance:
@@ -105,8 +123,24 @@ async def discover_similar_users(
         
         final_score = (VECTOR_WEIGHT * vector_similarity_score * 10) + (STRUCTURED_WEIGHT * structured_score_raw)
         
+        # Apply interest boost
+        if candidate_profile.user_id in interested_user_ids:
+            final_score += INTEREST_BOOST_SCORE
+            match_reasons.append("Expressed interest in your space")
+        
         profile_schema = schemas.UserProfile.model_validate(candidate_profile)
 
+        # Manually set the full_name from the eagerly loaded user relationship
+        if candidate_profile.user:
+            profile_schema.full_name = candidate_profile.user.full_name
+
+        # --- Generate Signed URL ---
+        signed_url = None
+        if candidate_profile.profile_picture_url:
+            signed_url = storage.generate_gcs_signed_url(candidate_profile.profile_picture_url)
+            
+        profile_schema.profile_picture_signed_url = signed_url
+        
         results.append(MatchResult(
             profile=profile_schema,
             score=final_score,

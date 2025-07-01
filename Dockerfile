@@ -8,7 +8,9 @@ ENV PYTHONUNBUFFERED 1
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
-    # Add any other system dependencies needed here
+    libpq-dev \
+    curl \
+    # Add other necessary system dependencies here, e.g., for specific DB drivers or libraries
     && rm -rf /var/lib/apt/lists/*
 
 # Install Poetry
@@ -29,6 +31,7 @@ RUN poetry install --no-root --only main --no-interaction --no-ansi
 COPY ./app ./app
 COPY ./scripts ./scripts
 COPY ./main.py ./main.py
+COPY ./test_db_connection.py ./test_db_connection.py
 # Copy alembic files if migrations are run inside the container start script
 COPY ./alembic.ini ./alembic.ini
 COPY ./alembic ./alembic

@@ -1,6 +1,6 @@
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload, Load
 from sqlalchemy.future import select
-from typing import Optional
+from typing import Optional, List
 import uuid
 from datetime import datetime, timedelta
 import logging
@@ -20,10 +20,14 @@ class CRUDInvitation(CRUDBase[Invitation, InvitationCreate, InvitationUpdate]):
         result = await db.execute(statement)
         return result.scalar_one_or_none()
 
-    async def get_by_invitation_token(self, db: Session, *, token: str) -> Optional[Invitation]:
-        statement = select(self.model).where(self.model.invitation_token == token)
-        result = await db.execute(statement)
-        return result.scalar_one_or_none()
+    async def get_by_invitation_token(
+        self, db: Session, *, token: str, options: Optional[List[Load]] = None
+    ) -> Optional[Invitation]:
+        query = select(self.model).where(self.model.invitation_token == token)
+        if options:
+            query = query.options(*options)
+        result = await db.execute(query)
+        return result.scalars().first()
 
     async def create_with_startup(
         self, db: Session, *, obj_in: InvitationCreate
@@ -50,6 +54,37 @@ class CRUDInvitation(CRUDBase[Invitation, InvitationCreate, InvitationUpdate]):
             approved_by_admin_id=obj_in.approved_by_admin_id, # Store who approved
             invitation_token=str(uuid.uuid4()), # Ensure a new token is generated
             expires_at=datetime.utcnow() + timedelta(days=settings.INVITATION_EXPIRE_DAYS) # Use config for expiry
+        )
+        db.add(db_obj)
+        await db.commit()
+        await db.refresh(db_obj)
+        return db_obj
+
+    async def create_for_employee(
+        self, db: Session, *, email: str, company_id: int, space_id: int, admin_id: int
+    ) -> Invitation:
+        """Creates an invitation for an employee to a company and space."""
+        # Check for existing pending invitation to this company/space
+        existing_invitation_stmt = select(self.model).where(
+            self.model.email == email,
+            self.model.company_id == company_id,
+            self.model.space_id == space_id,
+            self.model.status == InvitationStatus.PENDING,
+            self.model.expires_at > datetime.utcnow()
+        )
+        existing_invitation_result = await db.execute(existing_invitation_stmt)
+        existing_invitation = existing_invitation_result.scalar_one_or_none()
+
+        if existing_invitation:
+            return existing_invitation
+
+        db_obj = self.model(
+            email=email,
+            company_id=company_id,
+            space_id=space_id,
+            approved_by_admin_id=admin_id,
+            invitation_token=str(uuid.uuid4()),
+            expires_at=datetime.utcnow() + timedelta(days=settings.INVITATION_EXPIRE_DAYS)
         )
         db.add(db_obj)
         await db.commit()

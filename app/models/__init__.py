@@ -17,9 +17,12 @@ from .connection import Connection # Needed by User
 from .notification import Notification # Needed by routers?
 from .password_reset_token import PasswordResetToken # Needed by auth?
 from .verification_token import VerificationToken # Needed by auth?
+from .set_password_token import SetPasswordToken # For initial password setup
 from .enums import ContactVisibility # Needed by profile model/schema
 from .chat import ChatMessage # Add ChatMessage model import
 from .invitation import Invitation, InvitationStatus # Add this line
+from .referral import Referral # Add this line
+from .interest import Interest # noqa
 
 # You can also import all your models here later so Alembic can find them
 # e.g., from .item import Item 
@@ -43,6 +46,7 @@ __all__ = [
     "UserProfileSkillLink",
     "PasswordResetToken",
     "VerificationToken",
+    "SetPasswordToken",
     "Message",
     "MessageReaction",
     "ChatRoom",

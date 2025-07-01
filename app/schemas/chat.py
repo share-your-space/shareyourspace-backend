@@ -4,6 +4,7 @@ from pydantic import BaseModel
 
 # Assuming a User schema exists for embedding sender/recipient info
 from .user import User as UserSchema
+from .common import UserSimpleInfo
 
 # --- Conversation Schemas --- #
 class ConversationParticipantBase(BaseModel):
@@ -27,6 +28,7 @@ class ConversationCreate(ConversationBase):
 
 class ConversationSchema(ConversationBase):
     id: int
+    is_external: bool
     created_at: datetime
     participants: List[UserSchema]
 
@@ -52,6 +54,9 @@ class MessageReactionResponse(MessageReactionBase):
     model_config = {
         'from_attributes': True
     }
+
+class ExternalChatCreate(BaseModel):
+    recipient_id: int
 
 class MessageReactionsListResponse(BaseModel):
     reactions: list[MessageReactionResponse]
@@ -84,7 +89,7 @@ class ChatMessageBase(BaseModel):
 
 # Full message schema including loaded relationships
 class ChatMessageSchema(ChatMessageBase):
-    sender: UserSchema
+    sender: UserSimpleInfo
     reactions: List[MessageReactionResponse] = []
 
     model_config = {
@@ -95,12 +100,26 @@ class ChatMessageSchema(ChatMessageBase):
 class ChatMessageUpdate(BaseModel):
     content: str
 
-# Schema for representing a conversation in the list view for the frontend
-class ConversationInfo(BaseModel):
+# Schema for basic message info, used in ConversationForList
+class ChatMessageBasic(BaseModel):
     id: int
-    other_user: UserSchema
-    last_message: Optional[ChatMessageSchema] = None
+    sender_id: int
+    content: str
+    created_at: datetime
+    # Add other simple fields if needed by ContactList preview
+
+    model_config = {
+        'from_attributes': True
+    }
+
+# Schema for representing a conversation in the list view for the frontend
+class ConversationForList(BaseModel):
+    id: int
+    is_external: bool
+    other_user: UserSimpleInfo
+    last_message: Optional[ChatMessageBasic] = None
     has_unread_messages: bool
+    unread_count: Optional[int] = 0
 
     model_config = {
         'from_attributes': True

@@ -3,6 +3,7 @@ import logging
 from jose import JWTError, jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session # For DB operations
+from datetime import datetime, timezone
 
 from app.core.config import settings
 from app.db.session import AsyncSessionLocal # Import session factory
@@ -17,6 +18,7 @@ from app.crud.crud_chat import (
     get_or_create_conversation
 ) # Corrected import names
 from app.models.user import User as UserModel # Import UserModel
+from app.models.enums import ConnectionStatus # <--- ADDED IMPORT
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -132,9 +134,43 @@ def register_socketio_handlers(sio: socketio.AsyncServer):
         logger.info(f"User {sender_id} sending message to {recipient_id}. Content: '{content[:30]}...'. Attachment: {attachment_filename if attachment_url else 'None'}")
 
         async with AsyncSessionLocal() as db:
+            # --- BEGIN Connection/Space Admin/External Chat Check ---
+            allow_message = False
+            
+            # First, find the conversation. This is necessary to check if it's external.
+            conversation = await crud.crud_chat.get_or_create_conversation(
+                db=db, user1_id=sender_id, user2_id=recipient_id
+            )
+
+            # If the conversation is external, always allow messaging.
+            if conversation and conversation.is_external:
+                allow_message = True
+                logger.info(f"Allowing message in external conversation (ID: {conversation.id}) between {sender_id} and {recipient_id}")
+            else:
+                # If not external, perform the original connection/admin check.
+                connection = await crud.crud_connection.get_connection_between_users(
+                    db=db, user1_id=sender_id, user2_id=recipient_id
+                )
+                if connection and connection.status == ConnectionStatus.ACCEPTED:
+                    allow_message = True
+                else:
+                    # If not directly connected, check if recipient is sender's space admin
+                    sender_user_obj = await crud.crud_user.get_user_by_id(db, user_id=sender_id)
+                    if sender_user_obj and sender_user_obj.space_id:
+                        space = await db.get(models.SpaceNode, sender_user_obj.space_id)
+                        if space and space.corporate_admin_id == recipient_id:
+                            allow_message = True
+                            logger.info(f"Allowing message from {sender_id} to space admin {recipient_id} for space {sender_user_obj.space_id}")
+
+            if not allow_message:
+                logger.warning(f"User {sender_id} attempted to send message to {recipient_id} in a non-external chat without a valid connection.")
+                return # Do not proceed with message sending
+            # --- END Check --- 
+
             # Create message object for saving
             message_in = ChatMessageCreate(
                 recipient_id=recipient_id,
+                conversation_id=conversation.id, # Use the conversation ID we just found/created
                 content=content,
                 attachment_url=attachment_url,
                 attachment_filename=attachment_filename,
@@ -196,41 +232,34 @@ def register_socketio_handlers(sio: socketio.AsyncServer):
             return
 
         try:
-            conversation_partner_id = int(data['sender_id']) # The other user in the conversation
+            conversation_id = int(data['conversation_id'])
+            # sender_id is the conversation partner
+            conversation_partner_id = int(data['sender_id']) 
         except (KeyError, ValueError, TypeError) as e:
             logger.error(f"Invalid 'mark_as_read' data from {sid} (User: {reader_user_id}): {data} - Error: {e}")
             return
 
-        logger.info(f"User {reader_user_id} marking messages with user {conversation_partner_id} as read.")
+        logger.info(f"User {reader_user_id} marking messages in conversation {conversation_id} as read.")
 
         async with AsyncSessionLocal() as db:
             try:
-                # First, get or create the conversation to ensure we have its ID
-                conversation = await crud.crud_chat.get_or_create_conversation(
-                    db=db, user1_id=reader_user_id, user2_id=conversation_partner_id
-                )
-                if not conversation:
-                    logger.error(f"Could not get or create conversation between {reader_user_id} and {conversation_partner_id}")
-                    return
-
                 updated_count = await crud.crud_chat.mark_conversation_messages_as_read(
-                    db=db, conversation_id=conversation.id, reader_id=reader_user_id
+                    db=db, conversation_id=conversation_id, reader_id=reader_user_id
                 )
-                logger.info(f"Marked {updated_count} messages as read in conversation {conversation.id} for reader {reader_user_id}.")
+                logger.info(f"Marked {updated_count} messages as read in conversation {conversation_id} for reader {reader_user_id}.")
                 
                 if updated_count > 0:
                     # Notify the conversation partner that their messages have been read
                     partner_room = str(conversation_partner_id)
                     await sio.emit('messages_read', 
                                    {'reader_id': reader_user_id, 
-                                    'conversation_id': conversation.id, 
-                                    'conversation_partner_id': conversation_partner_id, # Keep for client use if needed
-                                    'count': updated_count},
+                                    'conversation_id': conversation_id, 
+                                    'read_at': datetime.now(timezone.utc).isoformat()},
                                    room=partner_room)
-                    logger.info(f"Emitted 'messages_read' to room {partner_room} for conversation {conversation.id}")
+                    logger.info(f"Emitted 'messages_read' to room {partner_room} for conversation {conversation_id}")
 
             except Exception as e:
-                logger.error(f"Failed to mark messages as read for user {reader_user_id} with {conversation_partner_id}: {e}")
+                logger.error(f"Failed to mark messages as read for user {reader_user_id} in conversation {conversation_id}: {e}")
 
     # --- Placeholder Handlers ---
     @sio.on('user_typing')

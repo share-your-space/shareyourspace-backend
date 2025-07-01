@@ -9,7 +9,7 @@ class RequestingStartupInfo(BaseModel):
     name: str
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 # Simplified info about the user being requested (if they exist)
 # or details provided in the request for a new user.
@@ -19,7 +19,7 @@ class RequestedUserInfo(BaseModel):
     email: EmailStr # Always present, from the original request
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class MemberRequestStatus(str, Enum):
     PENDING = "PENDING"
@@ -37,13 +37,13 @@ class MemberRequestDetail(BaseModel):
     requested_email: EmailStr # The email as entered in the request
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class MemberRequestListResponse(BaseModel):
     requests: List[MemberRequestDetail]
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class MemberRequestActionResponse(BaseModel):
     message: str
@@ -58,3 +58,8 @@ class StartupMemberRequestCreate(BaseModel):
     # Optional: Startup Admin can provide a full name if known
     full_name: Optional[str] = None 
     # startup_id will be derived from the authenticated Startup Admin 
+
+# Schema for details when a Corp Admin approves a member request
+class MemberRequestApprovalDetails(BaseModel):
+    workstation_id: Optional[int] = None
+    start_date: Optional[datetime] = None 
