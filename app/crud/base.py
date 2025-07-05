@@ -22,19 +22,21 @@ class CRUDBase(Generic[ModelType, CreateSchemaType, UpdateSchemaType]):
         """
         self.model = model
 
-    async def get(self, db: Session, id: Any) -> Optional[ModelType]:
+    async def get(self, db: AsyncSession, id: Any, *, options: Optional[List] = None) -> Optional[ModelType]:
         statement = select(self.model).filter(self.model.id == id)
+        if options:
+            statement = statement.options(*options)
         result = await db.execute(statement)
         return result.scalar_one_or_none()
 
     async def get_multi(
-        self, db: Session, *, skip: int = 0, limit: int = 100
+        self, db: AsyncSession, *, skip: int = 0, limit: int = 100
     ) -> List[ModelType]:
         statement = select(self.model).offset(skip).limit(limit)
         result = await db.execute(statement)
         return result.scalars().all()
 
-    async def create(self, db: Session, *, obj_in: CreateSchemaType) -> ModelType:
+    async def create(self, db: AsyncSession, *, obj_in: CreateSchemaType) -> ModelType:
         obj_in_data = jsonable_encoder(obj_in)
         db_obj = self.model(**obj_in_data)  # type: ignore
         db.add(db_obj)

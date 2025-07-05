@@ -1,57 +1,42 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List
-import logging
-from sqlalchemy.orm import selectinload
 
-from app import models, crud
-from app.schemas.notification import Notification, NotificationWithUser
+from app import models, schemas, services
 from app.db.session import get_db
-from app.security import get_current_email_verified_user
-from app.models.enums import NotificationType
-
-logger = logging.getLogger(__name__)
+from app.dependencies import get_current_active_user
 
 router = APIRouter()
 
-@router.get("/", response_model=List[Notification])
+@router.get("/", response_model=List[schemas.notification.Notification])
 async def get_user_notifications(
     skip: int = 0,
-    limit: int = 20, # Default to fewer items for API response
-    include_read: bool = False, 
+    limit: int = 20,
+    include_read: bool = False,
     db: AsyncSession = Depends(get_db),
-    current_user: models.User = Depends(get_current_email_verified_user),
+    current_user: models.User = Depends(get_current_active_user),
 ):
     """Retrieve notifications for the current user."""
-    notifications = await crud.crud_notification.get_notifications_for_user(
-        db=db, user_id=current_user.id, skip=skip, limit=limit, include_read=include_read
+    return await services.notification_service.get_notifications(
+        db, user_id=current_user.id, skip=skip, limit=limit, include_read=include_read
     )
-    return notifications
 
-@router.post("/{notification_id}/read", response_model=Notification)
+@router.post("/{notification_id}/read", response_model=schemas.notification.Notification)
 async def mark_notification_read(
     notification_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: models.User = Depends(get_current_email_verified_user),
+    current_user: models.User = Depends(get_current_active_user),
 ):
     """Mark a specific notification as read."""
-    notification = await crud.crud_notification.get_notification_by_id(db=db, notification_id=notification_id, options=[selectinload(models.Notification.sender)])
-
-    if not notification:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notification not found.")
-
-    # Ensure the notification belongs to the current user
-    if notification.user_id != current_user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to mark this notification as read.")
-
-    updated_notification = await crud.crud_notification.mark_notification_as_read(db=db, notification=notification)
-    return updated_notification
+    return await services.notification_service.mark_as_read(
+        db, notification_id=notification_id, user_id=current_user.id
+    )
 
 @router.post("/read-all", status_code=status.HTTP_200_OK)
 async def mark_all_notifications_read(
     db: AsyncSession = Depends(get_db),
-    current_user: models.User = Depends(get_current_email_verified_user),
+    current_user: models.User = Depends(get_current_active_user),
 ):
     """Mark all unread notifications for the current user as read."""
-    count = await crud.crud_notification.mark_all_notifications_as_read(db=db, user_id=current_user.id)
+    count = await services.notification_service.mark_all_as_read(db, user_id=current_user.id)
     return {"message": f"Marked {count} notifications as read."} 

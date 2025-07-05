@@ -5,6 +5,9 @@ from app.models.enums import UserStatus, UserRole
 
 # Re-using User schema, potentially create a specific Admin view later
 from .user import User as UserSchema
+from .organization import Startup as StartupSchema, BasicCompany, BasicStartup
+from .user_profile import UserProfile
+from .space import BasicSpace, UserWorkstationInfo
 
 
 # Schema for assigning a user to a space
@@ -21,7 +24,6 @@ class UserStatusUpdate(BaseModel):
 class SpaceCreate(BaseModel):
     name: str
     address: Optional[str] = None
-    corporate_admin_id: int
     company_id: Optional[int] = None # As per SpaceNode model
     total_workstations: int
 
@@ -132,3 +134,11 @@ class StartupUpdateAdmin(BaseModel):
 
 class MemberSlotUpdate(BaseModel):
     member_slots_allocated: int 
+
+class WaitlistedUser(UserSchema):
+    expressed_interest: bool = False
+    interest_id: Optional[int] = None
+
+class WaitlistedStartup(StartupSchema):
+    expressed_interest: bool = False
+    interest_id: Optional[int] = None 

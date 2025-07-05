@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, EmailStr
 from typing import Optional
 
 from app.models.enums import UserRole
@@ -12,4 +12,13 @@ class UserSimpleInfo(BaseModel):
     email: str
     role: Optional[UserRole] = None
     
-    model_config = ConfigDict(from_attributes=True) 
+    model_config = ConfigDict(from_attributes=True)
+
+class UserSimple(BaseModel):
+    id: int
+    full_name: str
+    email: EmailStr
+
+    model_config = ConfigDict(
+        from_attributes=True,
+    ) 

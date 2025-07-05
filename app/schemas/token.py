@@ -19,17 +19,6 @@ class TokenPayload(BaseModel):
     role: Optional[str] = None
     purpose: Optional[str] = None # For special-purpose tokens like 'onboarding'
 
-# For creating SetPasswordToken internally
-class SetPasswordTokenCreateInternal(BaseModel):
-    user_id: int
-    token: str
-    expires_at: datetime
-
-# For the /set-initial-password endpoint request body
-class SetInitialPasswordRequest(BaseModel):
-    token: str
-    new_password: str
-
 class OnboardingToken(BaseModel):
     message: str
     onboarding_token: str

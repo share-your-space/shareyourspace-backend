@@ -43,10 +43,9 @@ async def get_current_user(
         .where(User.id == token_data.user_id)
         .options(
             selectinload(User.profile),
-            selectinload(User.company),
+            selectinload(User.company).selectinload(Company.spaces),
             selectinload(User.startup).selectinload(Startup.direct_members).selectinload(User.profile),
             selectinload(User.space).selectinload(SpaceNode.company),
-            selectinload(User.managed_space).selectinload(SpaceNode.company),
             selectinload(User.assignments).selectinload(WorkstationAssignment.workstation),
         )
     )

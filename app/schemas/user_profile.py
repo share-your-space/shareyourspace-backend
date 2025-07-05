@@ -14,6 +14,7 @@ class UserProfileBase(BaseModel):
     tools_technologies: Optional[List[str]] = None
     linkedin_profile_url: Optional[HttpUrl] = None
     profile_picture_url: Optional[str] = None # Stores blob name
+    cover_photo_url: Optional[str] = None # Stores blob name for cover photo
 
 # Properties to receive via API on update
 class UserProfileUpdate(UserProfileBase):
@@ -26,6 +27,7 @@ class UserProfile(UserProfileBase):
     full_name: Optional[str] = None # Add full_name field
     email: Optional[str] = None # Add this back
     profile_picture_signed_url: Optional[HttpUrl] = None # Added for temporary signed URL
+    cover_photo_signed_url: Optional[HttpUrl] = None # For the cover photo
     role: Optional[UserRole] = None
     status: Optional[UserStatus] = None
 

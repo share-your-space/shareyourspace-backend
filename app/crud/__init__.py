@@ -1,5 +1,5 @@
 # Import individual CRUD modules so they can be accessed via the package
-from . import crud_user # noqa
+from .crud_user import crud_user # noqa
 from . import crud_verification_token # noqa
 from . import crud_password_reset_token # noqa
 from . import crud_organization # noqa
@@ -8,6 +8,7 @@ from . import crud_connection # noqa: Import connection CRUD
 from . import crud_notification # noqa: Import notification CRUD
 from . import crud_chat # noqa: Import chat CRUD
 from . import crud_interest # noqa
+from . import crud_user_profile # noqa
 from .crud_invitation import invitation # Make invitation instance directly available on crud package
 
 # Add other CRUD modules here as they are created 
@@ -31,13 +32,6 @@ from .crud_verification_token import (
     delete_verification_token,
     delete_verification_token_by_token
 )
-from .crud_set_password_token import (
-    create_set_password_token,
-    get_set_password_token_by_token_string,
-    get_set_password_token_by_user_id,
-    use_set_password_token,
-    is_set_password_token_expired
-)
 
 __all__ = [
     "user", 
@@ -57,11 +51,6 @@ __all__ = [
     "get_verification_token",
     "delete_verification_token",
     "delete_verification_token_by_token",
-    "create_set_password_token",
-    "get_set_password_token_by_token_string",
-    "get_set_password_token_by_user_id",
-    "use_set_password_token",
-    "is_set_password_token_expired",
     "get_password_reset_token_by_token_string",
     "message",
     "chat_room",
@@ -71,4 +60,5 @@ __all__ = [
     "connection_request",
     "invitation",
     "interest",
-] 
+    "crud_user",
+]

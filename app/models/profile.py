@@ -34,6 +34,7 @@ class UserProfile(Base):
     tools_technologies = Column(ARRAY(String), nullable=True)
     linkedin_profile_url = Column(String, nullable=True)
     profile_picture_url = Column(String, nullable=True)
+    cover_photo_url = Column(String, nullable=True)
     profile_vector = Column(Vector(768), nullable=True)
 
     # Relationship back to User (one-to-one)

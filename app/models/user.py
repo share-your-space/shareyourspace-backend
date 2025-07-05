@@ -28,6 +28,8 @@ class User(Base):
     role = Column(SQLEnum(UserRole), nullable=True)
     status = Column(SQLEnum(UserStatus), nullable=False, index=True, default=UserStatus.PENDING_VERIFICATION)
     is_active = Column(Boolean, default=False)
+    is_verified = Column(Boolean, default=False)
+    is_superuser = Column(Boolean, default=False)
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
     company_id = Column(Integer, ForeignKey("companies.id"), nullable=True)
@@ -43,13 +45,6 @@ class User(Base):
 
     verification_tokens = relationship("VerificationToken", back_populates="user", cascade="all, delete-orphan")
     password_reset_tokens = relationship("PasswordResetToken", back_populates="user", cascade="all, delete-orphan")
-
-    managed_space = relationship(
-        "SpaceNode", 
-        foreign_keys="app.models.space.SpaceNode.corporate_admin_id",
-        back_populates="corporate_admin", 
-        uselist=False
-    )
 
     space = relationship(
         "SpaceNode", 

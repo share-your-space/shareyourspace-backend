@@ -5,7 +5,7 @@ from sqlalchemy.orm import selectinload
 from typing import List, Optional
 
 from app.db.session import get_db
-from app import crud, schemas, models
+from app import crud, schemas, models, services
 from app.security import get_current_active_user, get_current_user_with_roles, get_current_user, get_current_verified_user_with_roles
 from app.schemas.user import User as UserSchema
 from app.models.enums import NotificationType, UserRole
@@ -30,10 +30,7 @@ async def read_company_profile(
     """
     Retrieve a specific company's profile by its ID.
     """
-    db_company = await crud.crud_organization.get_company(db, company_id=company_id)
-    if not db_company:
-        raise HTTPException(status_code=404, detail="Company not found")
-    return db_company
+    return await services.organization_service.get_company_profile(db, company_id=company_id)
 
 @router.put(
     "/companies/me",
@@ -48,15 +45,9 @@ async def update_my_company(
     """
     Update the current user's company profile.
     """
-    if not current_user.company_id:
-        raise HTTPException(status_code=404, detail="User not associated with a company")
-
-    company = await crud.crud_organization.get_company(db, company_id=current_user.company_id)
-    if not company:
-        raise HTTPException(status_code=404, detail="Company not found")
-
-    updated_company = await crud.crud_organization.update_company(db=db, db_obj=company, obj_in=company_in)
-    return updated_company
+    return await services.organization_service.update_company_profile(
+        db, company_in=company_in, current_user=current_user
+    )
 
 @router.get(
     "/startups/{startup_id}",
@@ -71,22 +62,9 @@ async def read_startup_profile(
     """
     Retrieve a specific startup's profile by its ID.
     """
-    db_startup = await crud.crud_organization.get_startup(db, startup_id=startup_id)
-    if not db_startup:
-        raise HTTPException(status_code=404, detail="Startup not found")
-
-    is_own_profile = current_user.startup_id == startup_id
-    is_sys_admin = current_user.role == models.enums.UserRole.SYS_ADMIN
-    is_active_startup = db_startup.status == models.enums.UserStatus.ACTIVE
-    is_corp_admin = current_user.role == models.enums.UserRole.CORP_ADMIN
-
-    if is_active_startup or is_own_profile or is_sys_admin or is_corp_admin:
-        return db_startup
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You are not authorized to view this startup profile."
-        )
+    return await services.organization_service.get_startup_profile(
+        db, startup_id=startup_id, current_user=current_user
+    )
 
 @router.get(
     "/startups/me",
@@ -103,24 +81,9 @@ async def read_my_startup(
     if not current_user.startup_id:
         raise HTTPException(status_code=404, detail="User is not associated with a startup.")
 
-    db_startup = await crud.crud_organization.get_startup(
-        db, 
-        startup_id=current_user.startup_id
+    return await services.organization_service.get_startup_profile(
+        db, startup_id=current_user.startup_id, current_user=current_user
     )
-    if not db_startup:
-        raise HTTPException(status_code=404, detail="Startup not found")
-
-    from app.schemas.organization import Startup
-    try:
-        # We manually validate and convert to a dict to see the data and bypass FastAPI's response_model issues.
-        validated_startup = Startup.model_validate(db_startup)
-        startup_dict = validated_startup.model_dump()
-        logger.info(f"DEBUG: Startup data being returned: {startup_dict}")
-        return startup_dict
-    except Exception as e:
-        logger.error(f"DEBUG: Pydantic validation FAILED for startup ID {current_user.startup_id}: {e}")
-        logger.error(f"DEBUG: Failing Startup raw data: {db_startup.__dict__}")
-        raise HTTPException(status_code=500, detail="Server error processing startup data.")
 
 @router.put(
     "/startups/me",
@@ -135,15 +98,9 @@ async def update_my_startup(
     """
     Update the current user's startup profile.
     """
-    if not current_user.startup_id:
-        raise HTTPException(status_code=404, detail="User not associated with a startup")
-
-    startup = await crud.crud_organization.get_startup(db, startup_id=current_user.startup_id)
-    if not startup:
-        raise HTTPException(status_code=404, detail="Startup not found")
-
-    updated_startup = await crud.crud_organization.update_startup(db=db, db_obj=startup, obj_in=startup_in)
-    return updated_startup
+    return await services.organization_service.update_startup_profile(
+        db, startup_in=startup_in, current_user=current_user
+    )
 
 @router.get(
     "/startups/me/members",
@@ -179,34 +136,6 @@ async def read_my_startup_members(
     team_members = result.scalars().all()
 
     return team_members
-
-@router.post("/request-invitation", status_code=202)
-async def request_invitation(
-    request_data: schemas.organization.InvitationRequest, 
-    db: AsyncSession = Depends(get_db),
-    current_user: models.User = Depends(get_current_active_user)
-):
-    """
-    Handles a user's request for an invitation to an organization.
-    """
-    org_id = request_data.organization_id
-    org_type = request_data.organization_type
-
-    await crud.crud_user.update_user_internal(
-        db, db_obj=current_user, obj_in=schemas.user.UserUpdateInternal(status=models.enums.UserStatus.WAITLISTED)
-    )
-
-    await create_notification_for_org_admins(
-            db=db,
-        org_id=org_id,
-        org_type=org_type,
-        message=f"User '{current_user.full_name or current_user.email}' has requested an invitation to join your organization.",
-        related_entity_id=current_user.id
-    )
-    
-    await db.commit()
-
-    return {"message": "Your request for an invitation has been sent."}
 
 @router.delete(
     "/startups/me/members/{member_id}",

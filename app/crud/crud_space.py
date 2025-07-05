@@ -1,45 +1,38 @@
+from __future__ import annotations
 import datetime
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Union
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update, or_
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import selectinload, joinedload
+from sqlalchemy.future import select
 
 from app.crud.crud_notification import create_notification
 from app.crud import crud_user, crud_connection
 from app.models.space import SpaceNode, Workstation, WorkstationAssignment
 from app.models.user import User
+from app.models.organization import Startup, Company
 from app.models.enums import UserRole, UserStatus, WorkstationStatus, NotificationType
 from app.schemas.space import WorkstationCreate, WorkstationUpdate
 from app.schemas.admin import SpaceCreate, SpaceUpdate
-from app import models
+from app import models, schemas
+from app.crud.base import CRUDBase
 
 import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# CRUD for SpaceNode
-async def create_space(db: AsyncSession, *, obj_in: SpaceCreate) -> SpaceNode:
+async def create_space(db: AsyncSession, *, obj_in: schemas.space.SpaceCreate) -> models.SpaceNode:
     logger.info(f"Creating new space: {obj_in.name}")
-    db_obj = SpaceNode(
+    db_obj = models.SpaceNode(
         name=obj_in.name,
         address=obj_in.address,
-        corporate_admin_id=obj_in.corporate_admin_id,
-        company_id=obj_in.company_id,
-        total_workstations=obj_in.total_workstations
+        total_workstations=obj_in.total_workstations,
+        company_id=obj_in.company_id
     )
     db.add(db_obj)
     await db.commit()
     await db.refresh(db_obj)
-    
-    admin_user = await crud_user.get_user_by_id(db, user_id=obj_in.corporate_admin_id)
-    if admin_user and admin_user.space_id is None:
-        admin_user.space_id = db_obj.id
-        db.add(admin_user)
-        await db.commit()
-        await db.refresh(admin_user)
-        
-    logger.info(f"Space '{db_obj.name}' created with ID: {db_obj.id}")
     return db_obj
 
 async def get_space_by_id(db: AsyncSession, space_id: int) -> Optional[SpaceNode]:
@@ -47,8 +40,7 @@ async def get_space_by_id(db: AsyncSession, space_id: int) -> Optional[SpaceNode
     result = await db.execute(
         select(SpaceNode)
         .options(
-            selectinload(SpaceNode.corporate_admin),
-            selectinload(SpaceNode.company)
+            selectinload(SpaceNode.company).selectinload(Company.direct_employees)
         )
         .filter(SpaceNode.id == space_id)
     )
@@ -58,7 +50,9 @@ async def get_spaces(db: AsyncSession, skip: int = 0, limit: int = 100) -> List[
     logger.debug(f"Fetching list of spaces with skip={skip}, limit={limit}")
     stmt = (
         select(SpaceNode)
-        .options(selectinload(SpaceNode.company))
+        .join(SpaceNode.company)
+        .filter(SpaceNode.total_workstations > 0)
+        .options(selectinload(SpaceNode.company), selectinload(SpaceNode.images))
         .offset(skip)
         .limit(limit)
     )
@@ -115,6 +109,78 @@ async def delete_space(db: AsyncSession, *, space_id: int) -> bool:
         await db.rollback()
         logger.error(f"Database error deleting space {space_id}: {e}", exc_info=True)
         return False
+
+async def bulk_create_workstations(db: AsyncSession, *, space_id: int, count: int) -> None:
+    """
+    Bulk creates a specified number of workstations for a given space.
+    """
+    if count <= 0:
+        return
+    
+    workstations_to_add = [
+        Workstation(name=f"Desk {i+1}", space_id=space_id, status=WorkstationStatus.AVAILABLE)
+        for i in range(count)
+    ]
+    db.add_all(workstations_to_add)
+    await db.commit()
+    logger.info(f"Bulk-created and committed {count} workstations for space ID: {space_id}")
+
+async def get_tenants_in_space(
+    db: AsyncSession, *, space_id: int, search: Optional[str] = None, sort_by: Optional[str] = None
+) -> List[Union[User, Startup]]:
+    """
+    Retrieves all tenants (freelancers and startups) in a given space,
+    with optional searching and sorting.
+    """
+    # Base queries for freelancers and startups
+    users_stmt = (
+        select(User)
+        .options(
+            selectinload(User.profile),
+            selectinload(User.assignments).selectinload(WorkstationAssignment.workstation)
+        )
+        .where(User.space_id == space_id, User.role == UserRole.FREELANCER)
+    )
+
+    startups_stmt = (
+        select(Startup)
+        .options(
+            selectinload(Startup.direct_members).selectinload(User.profile),
+            selectinload(Startup.direct_members)
+            .selectinload(User.assignments)
+            .selectinload(WorkstationAssignment.workstation),
+        )
+        .where(Startup.space_id == space_id)
+    )
+
+    # Apply search filter if provided
+    if search:
+        search_filter = f"%{search}%"
+        users_stmt = users_stmt.where(
+            or_(
+                User.full_name.ilike(search_filter),
+                User.email.ilike(search_filter)
+            )
+        )
+        startups_stmt = startups_stmt.where(Startup.name.ilike(search_filter))
+
+    # Execute queries
+    freelancers_result = await db.execute(users_stmt)
+    freelancers = freelancers_result.scalars().all()
+
+    startups_result = await db.execute(startups_stmt)
+    startups = startups_result.scalars().unique().all()
+
+    # Combine and sort results
+    tenants: List[Union[User, Startup]] = freelancers + startups
+
+    if sort_by == "name_asc":
+        tenants.sort(key=lambda t: t.name if isinstance(t, Startup) else t.full_name or "")
+    elif sort_by == "name_desc":
+        tenants.sort(key=lambda t: t.name if isinstance(t, Startup) else t.full_name or "", reverse=True)
+    # Add more sorting options as needed, e.g., by creation date
+
+    return tenants
 
 async def assign_admin_to_space(
     db: AsyncSession, *, space_obj: SpaceNode, new_admin_id: int
@@ -174,7 +240,8 @@ async def get_workstation_by_id_and_space_id(db: AsyncSession, *, workstation_id
     result = await db.execute(
         select(Workstation)
         .options(
-            selectinload(Workstation.active_assignment).selectinload(WorkstationAssignment.user)
+            selectinload(Workstation.active_assignment).selectinload(WorkstationAssignment.user),
+            selectinload(Workstation.space)
         )
         .where(Workstation.id == workstation_id, Workstation.space_id == space_id)
     )
@@ -358,63 +425,43 @@ async def assign_user_to_workstation(
 async def unassign_user_from_workstation(
     db: AsyncSession, 
     *, 
-    user_id: int, 
     workstation_id: int, 
     space_id: int, 
     unassigning_admin_id: Optional[int] = None
-) -> bool:
-    logger.info(f"Attempting to unassign user ID: {user_id} from workstation ID: {workstation_id} in space ID: {space_id}")
-
-    active_assignment_stmt = select(WorkstationAssignment).where(
-        WorkstationAssignment.user_id == user_id,
-        WorkstationAssignment.workstation_id == workstation_id,
-        WorkstationAssignment.space_id == space_id,
-        WorkstationAssignment.end_date.is_(None)
-    )
-    active_assignment_result = await db.execute(active_assignment_stmt)
-    assignment_to_end = active_assignment_result.scalars().first()
-
-    if not assignment_to_end:
-        logger.warning(f"Unassign workstation failed: No active assignment found for user ID {user_id} at workstation ID {workstation_id} in space {space_id}.")
-        return False 
-
-    assignment_to_end.end_date = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None) 
-    db.add(assignment_to_end)
+) -> Optional[Tuple[Workstation, int]]:
+    logger.info(f"Attempting to unassign user from workstation ID: {workstation_id} in space ID: {space_id}")
 
     workstation = await get_workstation_by_id_and_space_id(db, workstation_id=workstation_id, space_id=space_id)
-    workstation_name_for_notification = "your workstation"
-    space_name_for_notification = "the space"
-    if workstation:
-        workstation.status = WorkstationStatus.AVAILABLE
-        db.add(workstation)
-        workstation_name_for_notification = workstation.name
-        if workstation.space and workstation.space.name:
-            space_name_for_notification = workstation.space.name
-        elif workstation.space:
-            space_name_for_notification = f"space ID {workstation.space.id}"
-    else: 
-        logger.error(f"Critical: Workstation ID {workstation_id} not found during unassignment for user {user_id} despite active assignment.")
+    if not workstation:
+        raise ValueError(f"Workstation {workstation_id} not found in space {space_id}")
 
+    active_assignment = await get_active_assignment_for_workstation(db, workstation_id=workstation_id)
+
+    if not active_assignment:
+        logger.warning(f"Unassign workstation failed: No active assignment found for workstation ID {workstation_id}.")
+        return None
+
+    user_id_to_notify = active_assignment.user_id
+    
+    # End the current assignment
+    active_assignment.end_date = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None) 
+    db.add(active_assignment)
+
+    # Update the workstation status
+    workstation.status = WorkstationStatus.AVAILABLE
+    db.add(workstation)
+    
     try:
         await db.commit()
-        await db.refresh(assignment_to_end)
-        if workstation: await db.refresh(workstation)
-        logger.info(f"User ID: {user_id} successfully unassigned from workstation ID: {workstation_id}. Assignment ID: {assignment_to_end.id} ended.")
+        await db.refresh(workstation)
+        logger.info(f"User ID: {user_id_to_notify} successfully unassigned from workstation ID: {workstation_id}.")
 
-        await create_notification(
-            db=db,
-            user_id=user_id,
-            type=NotificationType.WORKSTATION_UNASSIGNED,
-            message=f"You have been unassigned from workstation '{workstation_name_for_notification}' in {space_name_for_notification}.",
-            reference=f"workstation_assignment:{assignment_to_end.id}",
-            link=f"/dashboard"
-        )
-        await db.commit() 
-        return True
+        # The notification will be created in the service layer
+        return workstation, user_id_to_notify
     except Exception as e:
         await db.rollback()
-        logger.error(f"Database error unassigning user {user_id} from workstation {workstation_id}: {e}", exc_info=True)
-        raise 
+        logger.error(f"Database error unassigning user from workstation {workstation_id}: {e}", exc_info=True)
+        raise
 
 async def unassign_user_from_all_workstations_in_space(db: AsyncSession, *, user_id: int, space_id: int) -> bool:
     """
@@ -491,7 +538,6 @@ async def remove_user_from_space(db: AsyncSession, *, user_to_remove: "User", re
     refreshed_user = await crud_user.get_user_by_id(db, user_id=user_id, options=[
         selectinload(User.profile),
         selectinload(User.space),
-        selectinload(User.managed_space),
         selectinload(User.company),
         selectinload(User.startup),
     ])
@@ -532,7 +578,6 @@ async def add_user_to_space(db: AsyncSession, *, user_to_add: User, space: Space
     refreshed_user = await crud_user.get_user_by_id(db, user_id=user_to_add.id, options=[
         selectinload(User.profile),
         selectinload(User.space),
-        selectinload(User.managed_space),
         selectinload(User.company),
         selectinload(User.startup),
         selectinload(User.assignments).selectinload(models.WorkstationAssignment.workstation)
@@ -542,17 +587,19 @@ async def add_user_to_space(db: AsyncSession, *, user_to_add: User, space: Space
         raise Exception("Could not retrieve user details after adding to space.")
     
     # Automatically create a connection with the space's corporate admin
-    if space.corporate_admin_id and space.corporate_admin_id != refreshed_user.id:
-        try:
-            await crud_connection.create_accepted_connection(
-                db=db,
-                user_one_id=refreshed_user.id,
-                user_two_id=space.corporate_admin_id
-            )
-            logger.info(f"Automatically created connection between user {refreshed_user.id} and corporate admin {space.corporate_admin_id}")
-        except Exception as e:
-            logger.error(f"Failed to create automatic connection for user {refreshed_user.id} with admin {space.corporate_admin_id}: {e}")
-            # Do not re-raise, as adding the user to the space is the primary goal.
+    if space.company and space.company.direct_employees:
+        corp_admin = next((user for user in space.company.direct_employees if user.role == UserRole.CORP_ADMIN), None)
+        if corp_admin and corp_admin.id != refreshed_user.id:
+            try:
+                await crud_connection.create_accepted_connection(
+                    db=db,
+                    user_one_id=refreshed_user.id,
+                    user_two_id=corp_admin.id
+                )
+                logger.info(f"Automatically created connection between user {refreshed_user.id} and corporate admin {corp_admin.id}")
+            except Exception as e:
+                logger.error(f"Failed to create automatic connection for user {refreshed_user.id} with admin {corp_admin.id}: {e}")
+                # Do not re-raise, as adding the user to the space is the primary goal.
 
     await create_notification(
         db=db,
@@ -577,11 +624,12 @@ async def get_occupied_workstation_count(db: AsyncSession, space_id: int) -> int
 async def get_space_admin(db: AsyncSession, space_id: int) -> Optional[User]:
     """Gets the corporate admin for a given space."""
     space = await get_space_by_id(db, space_id=space_id)
-    if not space or not space.corporate_admin_id:
+    if not space or not space.company:
         return None
     
-    admin = await crud_user.get_user_by_id(db, user_id=space.corporate_admin_id)
-    return admin
+    # Find the admin among the company's employees
+    corp_admin = next((user for user in space.company.direct_employees if user.role == UserRole.CORP_ADMIN), None)
+    return corp_admin
 
 async def get_managed_space(
     db: AsyncSession, current_user: models.User
@@ -594,3 +642,146 @@ async def get_managed_space(
     result = await db.execute(stmt)
     managed_space = result.scalar_one_or_none()
     return managed_space 
+
+async def terminate_workstation_assignments_for_user_ids(db: AsyncSession, *, user_ids: List[int]) -> None:
+    """Finds all active workstation assignments for a list of users and sets their end_date."""
+    if not user_ids:
+        return
+    
+    stmt = (
+        update(models.WorkstationAssignment)
+        .where(
+            models.WorkstationAssignment.user_id.in_(user_ids),
+            models.WorkstationAssignment.end_date.is_(None)
+        )
+        .values(end_date=datetime.datetime.utcnow())
+    )
+    await db.execute(stmt)
+    await db.commit() 
+
+async def get_by_company_id(db: AsyncSession, *, company_id: int) -> List[models.SpaceNode]:
+    """Gets all spaces associated with a specific company."""
+    if not company_id:
+        return []
+    stmt = select(models.SpaceNode).where(models.SpaceNode.company_id == company_id)
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+async def get_space_with_images(db: AsyncSession, *, space_id: int) -> Optional[SpaceNode]:
+    stmt = select(SpaceNode).where(SpaceNode.id == space_id).options(selectinload(SpaceNode.images))
+    result = await db.execute(stmt)
+    return result.scalars().first()
+
+async def get_space_image(db: AsyncSession, *, image_id: int) -> Optional[models.SpaceImage]:
+    """Gets a single space image by its ID."""
+    return await db.get(models.SpaceImage, image_id)
+
+async def delete_space_image(db: AsyncSession, *, image_id: int) -> bool:
+    """Deletes a space image by its ID."""
+    image = await db.get(models.SpaceImage, image_id)
+    if not image:
+        return False
+    await db.delete(image)
+    await db.commit()
+    return True
+
+async def update_workstation_status(db: AsyncSession, *, workstation_obj: Workstation, new_status: WorkstationStatus) -> Workstation:
+    """
+    Updates the status of a workstation object.
+    """
+    workstation_obj.status = new_status
+    db.add(workstation_obj)
+    await db.commit()
+    await db.refresh(workstation_obj)
+    return workstation_obj
+
+async def terminate_all_workstation_assignments_in_space(db: AsyncSession, *, space_id: Optional[int] = None, space_id__in: Optional[List[int]] = None):
+    """
+    Terminates all active workstation assignments for a given space or list of spaces by setting their end_date.
+    """
+    if not space_id and not space_id__in:
+        raise ValueError("Either space_id or space_id__in must be provided.")
+
+    workstation_query = select(Workstation.id)
+    if space_id:
+        workstation_query = workstation_query.where(Workstation.space_id == space_id)
+    if space_id__in:
+        workstation_query = workstation_query.where(Workstation.space_id.in_(space_id__in))
+
+    stmt = (
+        update(WorkstationAssignment)
+        .where(
+            WorkstationAssignment.workstation_id.in_(workstation_query),
+            WorkstationAssignment.end_date.is_(None)
+        )
+        .values(end_date=datetime.datetime.utcnow())
+        .execution_options(synchronize_session=False)
+    )
+    await db.execute(stmt)
+
+class CRUDSpace(CRUDBase[SpaceNode, SpaceCreate, SpaceUpdate]):
+    async def get_space_with_images(self, db: AsyncSession, *, space_id: int) -> Optional[SpaceNode]:
+        stmt = (
+            select(SpaceNode)
+            .where(SpaceNode.id == space_id)
+            .options(selectinload(SpaceNode.images), joinedload(SpaceNode.company))
+        )
+        result = await db.execute(stmt)
+        return result.scalars().first()
+
+    async def get_by_company_id(self, db: AsyncSession, *, company_id: int) -> List[SpaceNode]:
+        """Gets all spaces associated with a specific company."""
+        result = await db.execute(
+            select(self.model).where(self.model.company_id == company_id)
+        )
+        return result.scalars().all()
+
+    async def get_space_by_id(self, db: AsyncSession, space_id: int) -> Optional[SpaceNode]:
+        """
+        Fetches a single space by its ID with related company and admin details.
+        """
+        result = await db.execute(
+            select(SpaceNode)
+            .where(SpaceNode.id == space_id)
+            .options(
+                selectinload(SpaceNode.company).selectinload(Company.direct_employees),
+            )
+        )
+        return result.scalars().first()
+
+    async def get_workstations_in_space(self, db: AsyncSession, *, space_id: int, search: Optional[str] = None) -> List[Workstation]:
+        """
+        Fetches all workstations within a specific space.
+        """
+        stmt = (
+            select(Workstation)
+            .where(Workstation.space_id == space_id)
+            .options(selectinload(Workstation.active_assignment).selectinload(models.WorkstationAssignment.user))
+        )
+        if search:
+            stmt = stmt.where(Workstation.name.ilike(f"%{search}%"))
+
+        # The sorting (natural vs alphabetic) is handled in the service layer
+        # as it's complex to implement natural sort purely in SQL across all DBs.
+        # However, a simple preliminary sort can be useful.
+        stmt = stmt.order_by(Workstation.name)
+
+        result = await db.execute(stmt)
+        return result.scalars().all()
+
+    async def update_workstation_status(self, db: AsyncSession, *, space_id: int, workstation_id: int, new_status: WorkstationStatus) -> Optional[Workstation]:
+        """
+        Updates the status of a specific workstation.
+        """
+        workstation = await db.get(Workstation, workstation_id)
+        if workstation and workstation.space_id == space_id:
+            workstation.status = new_status
+            db.add(workstation)
+            await db.commit()
+            await db.refresh(workstation)
+            return workstation
+        return None
+    
+    # Add other space-specific CRUD methods here...
+
+space = CRUDSpace(SpaceNode) 

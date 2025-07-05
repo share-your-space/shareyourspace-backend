@@ -122,7 +122,6 @@ async def get_current_user(
             selectinload(models.User.profile),
             selectinload(models.User.startup),
             selectinload(models.User.company),
-            selectinload(models.User.managed_space),
             selectinload(models.User.space),
             selectinload(models.User.assignments).selectinload(models.WorkstationAssignment.workstation)
             ]

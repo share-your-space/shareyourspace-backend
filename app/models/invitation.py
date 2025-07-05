@@ -6,6 +6,7 @@ from app.db.base_class import Base
 from datetime import datetime, timedelta
 import uuid
 from typing import TYPE_CHECKING, Optional
+from app.models.enums import UserRole
 
 if TYPE_CHECKING:
     from .organization import Startup, Company
@@ -24,6 +25,7 @@ class Invitation(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     email: Mapped[str] = mapped_column(String, index=True, nullable=False)
+    role: Mapped[Optional[UserRole]] = mapped_column(SQLEnum(UserRole), nullable=True)
     
     startup_id: Mapped[Optional[int]] = mapped_column(ForeignKey("startups.id"), nullable=True)
     startup: Mapped[Optional["Startup"]] = relationship(back_populates="invitations")

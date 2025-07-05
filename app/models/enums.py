@@ -73,6 +73,7 @@ class NotificationType(str, enum.Enum):
     admin_corp_onboarded = "admin_corp_onboarded"
 
     INTEREST_EXPRESSED = "interest_expressed"
+    INTEREST_APPROVED = "interest_approved"
 
 
 class WorkstationStatus(str, enum.Enum):
@@ -116,6 +117,12 @@ class StartupStage(str, enum.Enum):
     SERIES_B = "Series B"
     SERIES_C = "Series C"
     GROWTH = "Growth"
+
+
+class InterestStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
 
 
 class CommunityBadge(str, Enum):

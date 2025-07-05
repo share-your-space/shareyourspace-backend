@@ -2,7 +2,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import Select, update, and_, or_
-from sqlalchemy.orm import Load, selectinload
+from sqlalchemy.orm import Load, selectinload, joinedload, subqueryload
 import logging
 from sqlalchemy.sql import func
 
@@ -13,10 +13,10 @@ from app.schemas.user import UserCreate, UserUpdateInternal
 from app.security import get_password_hash, verify_password
 from typing import List, Optional, Sequence, Any, Dict, Union
 from fastapi import HTTPException
-from app.crud import crud_connection, crud_space
 from app.core.config import settings
 from app.models.organization import Company, Startup
 from app.schemas.organization import CompanyCreate, CompanyUpdate, StartupCreate, StartupUpdate
+from app import models
 
 logger = logging.getLogger(__name__)
 
@@ -160,6 +160,8 @@ async def activate_corporate_user(db: AsyncSession, *, user_id: int, space_id: O
 
 async def assign_user_to_space(db: AsyncSession, *, user_id: int, space_id: Optional[int]) -> Optional[User]:
     logger.info(f"Assigning user ID: {user_id} to space ID: {space_id}")
+    # Import locally to avoid circular dependency
+    from app.crud import crud_space
     user = await get_user_by_id(db, user_id=user_id)
     if not user:
         logger.warning(f"Assign to space failed: User ID {user_id} not found.")
@@ -178,6 +180,8 @@ async def assign_user_to_space(db: AsyncSession, *, user_id: int, space_id: Opti
         if space_id is not None and space:
             if space.corporate_admin_id and space.corporate_admin_id != user.id:
                 logger.info(f"Creating automatic connection between user {user.id} and space admin {space.corporate_admin_id}.")
+                # Import locally to avoid circular dependency
+                from app.crud import crud_connection
                 await crud_connection.create_accepted_connection(
                     db=db,
                     user_one_id=user.id,
@@ -210,11 +214,10 @@ async def get_user_details_for_profile(db: AsyncSession, user_id: int) -> Option
         .where(User.id == user_id)
         .options(
             selectinload(User.profile),
-            selectinload(User.space),
-            selectinload(User.managed_space),
             selectinload(User.company),
             selectinload(User.startup).selectinload(Startup.direct_members),
-            selectinload(User.assignments).selectinload(WorkstationAssignment.workstation),
+            selectinload(User.space),
+            selectinload(User.assignments).selectinload(WorkstationAssignment.workstation)
         )
     )
     try:
@@ -258,42 +261,34 @@ async def get_users(
     user_type: Optional[UserRole] = None,
     status: Optional[UserStatus] = None,
     space_id: Optional[int] = None,
-    search_term: Optional[str] = None,
-    options: Optional[Sequence[Load]] = None
+    search_term: Optional[str] = None
 ) -> List[User]:
-    logger.debug(
-        f"Fetching users with skip={skip}, limit={limit}, user_type={user_type}, "
-        f"status={status}, space_id={space_id}, search_term='{search_term}'"
-    )
-    try:
-        stmt = select(User)
-        if user_type:
-            stmt = stmt.filter(User.role == user_type)
-        if status:
-            stmt = stmt.filter(User.status == status)
-        if space_id is not None:
-            stmt = stmt.filter(User.space_id == space_id)
-        if search_term:
-            search_filter = or_(
-                User.email.ilike(f"%{search_term}%"),
+    stmt = select(User)
+    if user_type:
+        stmt = stmt.where(User.role == user_type)
+    if status:
+        stmt = stmt.where(User.status == status)
+    if space_id:
+        stmt = stmt.where(User.space_id == space_id)
+    if search_term:
+        stmt = stmt.where(
+            or_(
                 User.full_name.ilike(f"%{search_term}%"),
+                User.email.ilike(f"%{search_term}%"),
             )
-            stmt = stmt.filter(search_filter)
-        effective_options = options if options is not None else [
-            selectinload(User.profile), 
-            selectinload(User.space), 
-            selectinload(User.managed_space)
-        ]
-        if effective_options:
-            stmt = stmt.options(*effective_options)
-        stmt = stmt.offset(skip).limit(limit).order_by(User.id)
-        result = await db.execute(stmt)
-        users = result.scalars().all()
-        logger.debug(f"Found {len(users)} users matching criteria.")
-        return users
-    except SQLAlchemyError as e:
-        logger.error(f"Database error fetching users: {e}", exc_info=True)
-        return []
+        )
+    
+    stmt = stmt.offset(skip).limit(limit)
+    # Always eager load relationships to prevent lazy loading issues
+    stmt = stmt.options(
+        selectinload(User.profile),
+        selectinload(User.company),
+        selectinload(User.startup),
+        selectinload(User.space),
+        selectinload(User.assignments).selectinload(WorkstationAssignment.workstation)
+    )
+    result = await db.execute(stmt)
+    return result.scalars().all()
 
 async def get_total_users_count(
     db: AsyncSession,
@@ -367,3 +362,139 @@ async def get_admin_for_startup(db: AsyncSession, *, startup_id: int) -> Optiona
         )
     )
     return result.scalars().first()
+
+async def get_users_by_space_id(db: AsyncSession, *, space_id: int, search: Optional[str] = None) -> List[User]:
+    """
+    Retrieves all users assigned to a specific space.
+    """
+    stmt = (
+        select(User)
+        .options(
+            selectinload(User.profile),
+            selectinload(User.assignments).selectinload(models.WorkstationAssignment.workstation),
+            selectinload(User.company),
+            selectinload(User.startup).selectinload(Startup.direct_members),
+        )
+        .where(User.space_id == space_id)
+    )
+    if search:
+        stmt = stmt.where(
+            or_(
+                User.full_name.ilike(f"%{search}%"),
+                User.email.ilike(f"%{search}%")
+            )
+        )
+    stmt = stmt.order_by(User.full_name)
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+async def get_user_by_id(db: AsyncSession, user_id: int, options: Optional[List] = None) -> Optional[User]:
+    """
+    Fetches a single user by their ID, with optional related data.
+    """
+    logger.debug(f"Fetching user by ID: {user_id} with options: {options}")
+    try:
+        stmt = select(User).filter(User.id == user_id)
+        if options:
+            stmt = stmt.options(*options)
+        result = await db.execute(stmt)
+        user = result.scalars().first()
+        if not user:
+            logger.warning(f"User with ID {user_id} not found.")
+        return user
+    except SQLAlchemyError as e:
+        logger.error(f"Database error fetching user by ID {user_id}: {e}", exc_info=True)
+        return None
+
+async def get_users_by_company_and_role(
+    db: AsyncSession, *, company_id: int, role: UserRole, search: Optional[str] = None
+) -> List[User]:
+    """
+    Retrieves all users for a given company and role.
+    """
+    stmt = (
+        select(User)
+        .options(
+            selectinload(User.profile),
+            selectinload(User.assignments).selectinload(models.WorkstationAssignment.workstation),
+            selectinload(User.company),
+            selectinload(User.startup).selectinload(Startup.direct_members),
+        )
+        .where(User.company_id == company_id, User.role == role)
+    )
+    if search:
+        stmt = stmt.where(
+            or_(
+                User.full_name.ilike(f"%{search}%"),
+                User.email.ilike(f"%{search}%")
+            )
+        )
+    stmt = stmt.order_by(User.full_name)
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+async def bulk_update_user_status_and_space(
+    db: AsyncSession, *, user_ids: List[int], status: UserStatus, space_id: Optional[int]
+):
+    """
+    Bulk updates the status and space_id for a list of users.
+    """
+    if not user_ids:
+        return
+    stmt = (
+        update(User)
+        .where(User.id.in_(user_ids))
+        .values(status=status, space_id=space_id)
+        .execution_options(synchronize_session=False)
+    )
+    await db.execute(stmt)
+
+async def disassociate_all_employees_from_company(db: AsyncSession, *, company_id: int):
+    """
+    Disassociates all employees from a company by setting their company_id to None.
+    This is used when a company is being deleted.
+    """
+    stmt = (
+        update(User)
+        .where(User.company_id == company_id)
+        .values(company_id=None)
+        .execution_options(synchronize_session=False)
+    )
+    await db.execute(stmt)
+    await db.commit()
+
+# Wrapper class to mimic the old CRUD object structure for compatibility
+class CrudUserWrapper:
+    def __init__(self):
+        # This adapter method handles the parameter name mismatch (id vs user_id)
+        async def get_adapter(db: AsyncSession, *, id: int, options: Optional[List] = None) -> Optional[User]:
+            return await get_user_by_id(db, user_id=id, options=options)
+
+        self.get = get_adapter
+        self.get_user_by_id = get_user_by_id
+        self.get_user_by_email = get_user_by_email
+        self.create_user = create_user
+        self.update_user_internal = update_user_internal
+        self.update_user_password = update_user_password
+        self.get_users_by_status = get_users_by_status
+        self.get_users_by_role_and_startup = get_users_by_role_and_startup
+        self.get_users_by_role_and_space_id = get_users_by_role_and_space_id
+        self.get_user_by_email_and_startup = get_user_by_email_and_startup
+        self.activate_corporate_user = activate_corporate_user
+        self.assign_user_to_space = assign_user_to_space
+        self.activate_user_for_startup_invitation = activate_user_for_startup_invitation
+        self.get_user_details_for_profile = get_user_details_for_profile
+        self.get_users_by_startup_and_space = get_users_by_startup_and_space
+        self.update_user_password_by_email = update_user_password_by_email
+        self.get_users = get_users
+        self.get_total_users_count = get_total_users_count
+        self.get_active_assignment_for_user = get_active_assignment_for_user
+        self.remove_user_from_space_and_deactivate = remove_user_from_space_and_deactivate
+        self.get_admin_for_company = get_admin_for_company
+        self.get_admin_for_startup = get_admin_for_startup
+        self.get_users_by_space_id = get_users_by_space_id
+        self.get_users_by_company_and_role = get_users_by_company_and_role
+        self.bulk_update_user_status_and_space = bulk_update_user_status_and_space
+        self.disassociate_all_employees_from_company = disassociate_all_employees_from_company
+
+crud_user = CrudUserWrapper()

@@ -4,11 +4,14 @@ from typing import Optional, List
 import uuid
 from datetime import datetime, timedelta
 import logging
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import delete
 
 from app.crud.base import CRUDBase
 from app.models.invitation import Invitation, InvitationStatus
 from app.schemas.invitation import InvitationCreate, InvitationUpdate
 from app.core.config import settings
+from app.models import User
 
 logger = logging.getLogger(__name__)
 
@@ -158,5 +161,20 @@ class CRUDInvitation(CRUDBase[Invitation, InvitationCreate, InvitationUpdate]):
         await db.refresh(invitation)
         logger.info(f"Invitation {invitation.id} for {invitation.email} to startup {invitation.startup_id} marked as DECLINED.")
         return invitation
+
+    async def create_with_company_and_role(self, db: AsyncSession, *, obj_in: InvitationCreate) -> Invitation:
+        db_obj = self.model(**obj_in.model_dump())
+        db.add(db_obj)
+        await db.commit()
+        await db.refresh(db_obj)
+        return db_obj
+
+    async def delete_invitations_for_company(self, db: AsyncSession, *, company_id: int):
+        """
+        Deletes all invitations associated with a specific company.
+        """
+        stmt = delete(self.model).where(self.model.company_id == company_id)
+        await db.execute(stmt)
+        await db.commit()
 
 invitation = CRUDInvitation(Invitation) 

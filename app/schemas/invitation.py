@@ -1,10 +1,10 @@
 from __future__ import annotations
-from typing import Optional
+from typing import Optional, List
 from pydantic import BaseModel, EmailStr, Field
 from datetime import datetime
 
 from app.models.invitation import InvitationStatus
-from .organization import Startup
+from .organization import Startup, Company
 from .user import User
 
 class InvitationBase(BaseModel):
@@ -66,5 +66,10 @@ class UnifiedInvitationCreate(BaseModel):
     email: EmailStr
     startup_id: int 
 
-Invitation.model_rebuild()
-InvitationListResponse.model_rebuild() 
+class AdminInviteCreate(BaseModel):
+    email: EmailStr
+
+class InvitationWithDetails(Invitation):
+    company: Optional[Company] = None
+    startup: Optional[Startup] = None
+    space: Optional['BasicSpace'] = None 

@@ -1,6 +1,6 @@
 from __future__ import annotations
-from pydantic import BaseModel, EmailStr, Field
-from typing import List, Optional, Union, TYPE_CHECKING
+from pydantic import BaseModel, EmailStr, Field, HttpUrl
+from typing import List, Optional, Union, TYPE_CHECKING, Any
 from enum import Enum
 from pydantic import ConfigDict
 from datetime import datetime
@@ -8,16 +8,22 @@ from datetime import datetime
 from app.models.enums import UserRole, WorkstationStatus as WorkstationStatusEnum, UserStatus
 if TYPE_CHECKING:
     from .user import User, BasicUser
-from .organization import Startup, BasicStartup
+from .organization import Startup, BasicStartup, Company
 
 class Space(BaseModel):
     id: int
     name: str
     address: Optional[str] = None
-    corporate_admin_id: Optional[int] = None
     company_id: Optional[int] = None
     total_workstations: int = 0
-    workstations: List[WorkstationDetail]
+    headline: Optional[str] = None
+    amenities: Optional[List[str]] = None
+    house_rules: Optional[str] = None
+    vibe: Optional[str] = None
+    opening_hours: Optional[dict] = None
+    key_highlights: Optional[List[str]] = None
+    neighborhood_description: Optional[str] = None
+    description: Optional[str] = None
 
     model_config = ConfigDict(
         from_attributes=True
@@ -91,8 +97,7 @@ class WorkstationAssignmentResponse(BaseModel):
     user_id: int
     workstation_id: int
     space_id: int
-    # start_date: Optional[date]
-    # end_date: Optional[date]
+    start_date: datetime
 
     class Config:
         from_attributes = True
@@ -193,6 +198,9 @@ class BrowseableSpace(BaseModel):
     id: int
     name: str
     address: Optional[str] = None
+    headline: Optional[str] = None
+    cover_image_url: Optional[str] = None
+    total_workstations: int = 0
     company_name: str
     company_id: Optional[int] = None
     interest_status: str # 'interested' | 'not_interested' | 'unavailable'
@@ -218,3 +226,49 @@ class SpaceCreationUserResponse(BaseModel):
 class SpaceCreationResponse(BaseModel):
     space: BasicSpace
     user: SpaceCreationUserResponse
+
+class SpaceImageCreate(BaseModel):
+    space_id: int
+    image_url: str
+    description: Optional[str] = None
+
+class SpaceImageSchema(BaseModel):
+    id: int
+    image_url: str
+    created_at: datetime
+    description: Optional[str] = None
+
+    model_config = ConfigDict(
+        from_attributes=True
+    )
+
+class SpaceProfile(BaseModel):
+    id: int
+    name: str
+    headline: Optional[str] = None
+    description: Optional[str] = None
+    address: Optional[str] = None
+    amenities: Optional[List[str]] = None
+    house_rules: Optional[str] = None
+    images: List[SpaceImageSchema] = []
+    vibe: Optional[str] = None
+    opening_hours: Optional[dict] = None
+    key_highlights: Optional[List[str]] = None
+    neighborhood_description: Optional[str] = None
+    company: Optional[BasicCompany] = None
+
+    model_config = ConfigDict(
+        from_attributes=True
+    )
+
+class SpaceProfileUpdate(BaseModel):
+    name: Optional[str] = None
+    headline: Optional[str] = None
+    description: Optional[str] = None
+    address: Optional[str] = None
+    amenities: Optional[List[str]] = None
+    house_rules: Optional[str] = None
+    vibe: Optional[str] = None
+    opening_hours: Optional[dict] = None
+    key_highlights: Optional[List[str]] = None
+    neighborhood_description: Optional[str] = None

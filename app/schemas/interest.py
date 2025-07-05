@@ -1,40 +1,30 @@
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import Optional
 from datetime import datetime
-
-from app.models.interest import InterestStatus
-from app.schemas.user import UserDetail as UserDetailSchema
-from app.schemas.organization import Startup as StartupSchema
+from app.models.enums import InterestStatus
+from .user import User
 
 class InterestBase(BaseModel):
     space_id: int
-    user_id: int
-    status: Optional[InterestStatus] = InterestStatus.PENDING
 
-class InterestCreate(BaseModel):
-    space_id: int
+class InterestCreate(InterestBase):
+    pass
 
 class InterestUpdate(BaseModel):
-    status: Optional[InterestStatus] = None
+    status: InterestStatus
 
 class InterestInDBBase(InterestBase):
     id: int
+    user_id: int
     status: InterestStatus
     created_at: datetime
     updated_at: datetime
-    
+
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class Interest(InterestInDBBase):
-    pass
+    user: User
 
-# For returning detailed interest info to Corp Admins
-class InterestDetail(BaseModel):
-    id: int
-    status: InterestStatus
-    user: UserDetailSchema
-    startup: Optional[StartupSchema] = None
-
-class InterestResponse(BaseModel):
-    interests: List[InterestDetail] 
+class InterestStatusResponse(BaseModel):
+    has_expressed_interest: bool 

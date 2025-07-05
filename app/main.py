@@ -3,7 +3,7 @@ from starlette.middleware.cors import CORSMiddleware
 import socketio
 
 from app.routers import (
-    auth, users, admin, spaces, organizations, invitations,
+    auth, users, sys_admin, corp_admin, spaces, organizations, invitations,
     connections, chat, notifications, matching, workstations,
     uploads, interests
 )
@@ -17,6 +17,8 @@ fastapi_app = FastAPI(
     openapi_url=f"{settings.API_V1_STR}/openapi.json"
 )
 
+fastapi_app.state.sio = sio
+
 # Set all CORS enabled origins
 if settings.ALLOWED_ORIGINS:
     fastapi_app.add_middleware(
@@ -29,7 +31,8 @@ if settings.ALLOWED_ORIGINS:
 
 # Include all routers to the FastAPI app instance
 fastapi_app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
-fastapi_app.include_router(admin.router, prefix="/api/v1/admin", tags=["admin"])
+fastapi_app.include_router(sys_admin.router, prefix="/api/v1", tags=["System Admin"])
+fastapi_app.include_router(corp_admin.router, prefix="/api/v1", tags=["Corporate Admin"])
 fastapi_app.include_router(users.router, prefix="/api/v1/users", tags=["users"])
 fastapi_app.include_router(spaces.router, prefix="/api/v1/spaces", tags=["spaces"])
 fastapi_app.include_router(workstations.router, prefix="/api/v1/workstations", tags=["workstations"])

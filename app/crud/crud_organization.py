@@ -1,5 +1,6 @@
 from typing import List, Optional
 
+from sqlalchemy import update
 from sqlalchemy.future import select
 from sqlalchemy.orm import Session, selectinload # Changed from AsyncSession for now if using Session
 from sqlalchemy.ext.asyncio import AsyncSession # Keep if truly async
@@ -89,7 +90,7 @@ async def get_startup(db: AsyncSession, startup_id: int, options: Optional[List]
     
     # Eager load relationships for the schema
     query = query.options(
-        selectinload(Startup.direct_members),
+        selectinload(Startup.direct_members).selectinload(User.profile),
         selectinload(Startup.space)
     )
 
@@ -179,6 +180,7 @@ async def get_startups_by_status(db: AsyncSession, status: UserStatus, skip: int
     """Fetches all startups with a given status."""
     stmt = (
         select(Startup)
+        .options(selectinload(Startup.direct_members))
         .filter(Startup.status == status)
     )
     if search_term:
@@ -342,3 +344,27 @@ async def add_user_to_startup(
     await db.commit()
     await db.refresh(updated_user)
     return updated_user 
+
+async def bulk_update_startup_space(db: AsyncSession, *, startup_ids: List[int], space_id: Optional[int]):
+    """
+    Bulk updates the space_id for a list of startups.
+    """
+    if not startup_ids:
+        return
+    stmt = (
+        update(Startup)
+        .where(Startup.id.in_(startup_ids))
+        .values(space_id=space_id)
+        .execution_options(synchronize_session=False)
+    )
+    await db.execute(stmt)
+
+# Placeholder for get_company_by_admin_user - will require linking users to companies
+# async def get_company_by_admin_user(db: AsyncSession, user_id: int) -> Optional[Company]:
+#     # This needs the Company model to have a direct FK to the admin user, 
+#     # or a join through an association table/role.
+#     # result = await db.execute(
+#     #     select(Company).join(User).filter(Company.admin_id == user_id)
+#     # )
+#     # return result.scalars().first()
+#     pass 

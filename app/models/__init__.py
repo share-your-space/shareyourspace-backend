@@ -11,15 +11,14 @@ from app.db.base_class import Base  # noqa: F401
 
 from .user import User # Needed by other models/routers
 from .organization import Company, Startup # Needed by User
-from .space import SpaceNode, Workstation, WorkstationAssignment # Needed by User?
+from .space import SpaceNode, Workstation, WorkstationAssignment, SpaceImage # Needed by User?
 from .profile import UserProfile # Import the CORRECT profile model
 from .connection import Connection # Needed by User
 from .notification import Notification # Needed by routers?
 from .password_reset_token import PasswordResetToken # Needed by auth?
 from .verification_token import VerificationToken # Needed by auth?
-from .set_password_token import SetPasswordToken # For initial password setup
-from .enums import ContactVisibility # Needed by profile model/schema
-from .chat import ChatMessage # Add ChatMessage model import
+from .enums import ContactVisibility, UserRole, UserStatus, ConnectionStatus, NotificationType, TeamSize, StartupStage # Needed by profile model/schema
+from .chat import ChatMessage, Conversation, MessageReaction # Add ChatMessage model import
 from .invitation import Invitation, InvitationStatus # Add this line
 from .referral import Referral # Add this line
 from .interest import Interest # noqa
@@ -46,7 +45,6 @@ __all__ = [
     "UserProfileSkillLink",
     "PasswordResetToken",
     "VerificationToken",
-    "SetPasswordToken",
     "Message",
     "MessageReaction",
     "ChatRoom",
@@ -62,5 +60,6 @@ __all__ = [
     "WorkstationStatus",
     "NotificationType", 
     "NotificationStatus",
-    "UserChatRoomRole"
+    "UserChatRoomRole",
+    "SpaceImage"
 ] 
