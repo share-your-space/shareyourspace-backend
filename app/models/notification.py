@@ -18,7 +18,7 @@ class Notification(Base):
 
     # The user who initiated the action that created the notification
     # For a join request, this is the user asking to join.
-    related_entity_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=True)
+    related_entity_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=True)
 
     reference = Column(String, index=True, nullable=True) # e.g., 'connection:<id>', 'conversation:<id>'
     link = Column(String, nullable=True) # e.g., '/profile/123', '/chat?conversationId=456'

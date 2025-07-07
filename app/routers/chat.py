@@ -231,4 +231,41 @@ async def initiate_external_chat(
         db, user1_id=current_user.id, user2_id=recipient.id, is_external=True
     )
 
-    return conversation_orm 
+    return conversation_orm
+
+@router.post(
+    "/initiate-with-space-admin",
+    response_model=schemas.chat.ConversationSchema,
+    summary="Initiate a chat with the space admin",
+    description="Creates a new conversation with the space admin of the user's current space."
+)
+async def initiate_chat_with_space_admin(
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    if not current_user.space_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User is not in a space."
+        )
+
+    space = await crud.crud_space.get_space_by_id(db, space_id=current_user.space_id)
+    if not space or not space.corporate_admin_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Space admin not found for the user's space."
+        )
+
+    if current_user.id == space.corporate_admin_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You cannot initiate a chat with yourself."
+        )
+
+    conversation = await services.chat_service.get_or_create_conversation(
+        db=db, user1_id=current_user.id, user2_id=space.corporate_admin_id
+    )
+    if not conversation:
+        raise HTTPException(status_code=500, detail="Could not get or create conversation.")
+
+    return conversation 

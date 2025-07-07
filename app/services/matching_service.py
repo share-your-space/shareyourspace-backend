@@ -37,7 +37,10 @@ def _calculate_structured_score(
     return score, reasons
 
 async def discover_users(db: AsyncSession, *, current_user: models.User) -> List[schemas.matching.MatchResult]:
-    if not current_user.profile or current_user.profile.profile_vector is None:
+    # TODO: This feature is temporarily disabled pending rework of the vector search.
+    return []
+    
+    if not current_user.profile:
         return [schemas.matching.MatchResult(message="Please complete your profile to discover others.")]
 
     if not current_user.space_id and not current_user.managed_space:

@@ -12,26 +12,30 @@ class UserProfileBase(BaseModel):
     project_interests_goals: Optional[str] = None
     collaboration_preferences: Optional[List[str]] = None
     tools_technologies: Optional[List[str]] = None
-    linkedin_profile_url: Optional[HttpUrl] = None
-    profile_picture_url: Optional[str] = None # Stores blob name
-    cover_photo_url: Optional[str] = None # Stores blob name for cover photo
+    profile_picture_url: Optional[str] = None
+    cover_photo_url: Optional[str] = None
+
+# Properties to receive on creation
+class UserProfileCreate(UserProfileBase):
+    pass
 
 # Properties to receive via API on update
 class UserProfileUpdate(UserProfileBase):
-    pass # Inherits all fields from Base, all are optional
+    linkedin_profile_url: Optional[HttpUrl] = None
 
 # Properties to return to client
 class UserProfile(UserProfileBase):
     id: int
     user_id: int
-    full_name: Optional[str] = None # Add full_name field
-    email: Optional[str] = None # Add this back
-    profile_picture_signed_url: Optional[HttpUrl] = None # Added for temporary signed URL
-    cover_photo_signed_url: Optional[HttpUrl] = None # For the cover photo
+    is_profile_complete: bool
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+    linkedin_profile_url: Optional[str] = None
+    profile_picture_signed_url: Optional[str] = None
+    cover_photo_signed_url: Optional[str] = None
     role: Optional[UserRole] = None
     status: Optional[UserStatus] = None
 
-    # Pydantic V2 uses model_config instead of Config
     model_config = ConfigDict(
-        from_attributes=True # Allows reading data from ORM models
-    ) 
+        from_attributes=True
+    )

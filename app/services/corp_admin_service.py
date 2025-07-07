@@ -4,61 +4,82 @@ from sqlalchemy import select
 from typing import List, Optional, Union
 import re
 from sqlalchemy.orm import selectinload
+import logging
 
 from app import crud, models, schemas
 from app.models.enums import UserRole, UserStatus, NotificationType, InterestStatus
-from app.schemas.admin import StartupUpdateAdmin, MemberSlotUpdate
+from app.schemas.admin import StartupUpdateAdmin, MemberSlotUpdate, AddTenantRequest
 
-async def approve_interest(
-    db: AsyncSession, *, interest_id: int, space_id: int, current_user: models.User
+logger = logging.getLogger(__name__)
+
+async def add_tenant_to_space(
+    db: AsyncSession,
+    *,
+    space_id: int,
+    tenant_data: AddTenantRequest,
+    current_user: models.User,
 ) -> None:
     """
-    Approves an interest request, moving the user or startup into the specified space.
+    Adds a tenant to a space or invites them if no prior interest was expressed.
     """
-    # First, verify the admin has permission for this specific space
-    await check_admin_space_permission(db=db, space_id=space_id, current_user=current_user)
+    space = await check_admin_space_permission(db, current_user=current_user, space_id=space_id)
 
-    interest = await db.get(
-        models.Interest,
-        interest_id,
-        options=[selectinload(models.Interest.user), selectinload(models.Interest.space)],
-    )
-    if not interest:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Interest not found"
-        )
+    user_id_to_check = None
+    startup_id_to_check = None
     
-    if interest.space_id != space_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Interest does not belong to this space."
-        )
+    if tenant_data.user_id:
+        user = await crud.crud_user.get_user_by_id(db, user_id=tenant_data.user_id)
+        if not user or user.role != UserRole.FREELANCER:
+            raise HTTPException(status_code=404, detail="Freelancer not found.")
+        user_id_to_check = user.id
+        
+    elif tenant_data.startup_id:
+        startup = await crud.crud_organization.get_startup(db, startup_id=tenant_data.startup_id)
+        if not startup:
+            raise HTTPException(status_code=404, detail="Startup not found.")
+        startup_id_to_check = startup.id
+        # The user associated with the interest/invitation is the startup admin
+        startup_admin = next((m for m in startup.direct_members if m.role == UserRole.STARTUP_ADMIN), None)
+        if not startup_admin:
+            raise HTTPException(status_code=400, detail="Startup has no admin to invite.")
+        user_id_to_check = startup_admin.id
 
-    user_to_add = interest.user
-    if not user_to_add:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User associated with interest not found",
-        )
-
-    add_request = schemas.admin.AddUserToSpaceRequest(user_id=user_to_add.id)
-
-    # Use the centralized function to handle adding/moving the user
-    await add_or_move_user_to_space(db=db, space_id=space_id, add_user_request=add_request, current_user=current_user)
-
-    # Update interest status
-    interest.status = models.InterestStatus.ACCEPTED
-    db.add(interest)
-
-    # Create a notification for the user
-    await crud.crud_notification.create_notification(
-        db,
-        user_id=user_to_add.id,
-        type=models.enums.NotificationType.INTEREST_ACCEPTED,
-        message=f"Your interest in the space '{interest.space.name}' has been accepted!",
-        reference=f"space:{interest.space_id}",
-        link=f"/spaces/{interest.space_id}/profile"
+    # Check for existing interest from the user/startup for THIS space
+    existing_interest = await crud.crud_interest.interest.get_by_tenant_and_space(
+        db, user_id=user_id_to_check, startup_id=startup_id_to_check, space_id=space_id
     )
-    
+
+    if existing_interest and existing_interest.status == InterestStatus.PENDING:
+        # User expressed interest, so add them directly
+        if startup_id_to_check:
+            await crud.crud_organization.add_startup_to_space(db, startup_id=startup_id_to_check, space_id=space.id)
+        else: # It's a freelancer
+            await crud.crud_user.add_user_to_space(db, user_id=user_id_to_check, space_id=space.id)
+        
+        existing_interest.status = InterestStatus.ACCEPTED
+        db.add(existing_interest)
+        
+        await crud.crud_notification.create_notification(
+            db, user_id=user_id_to_check, type=NotificationType.ADDED_TO_SPACE,
+            message=f"Your interest was accepted and you've been added to the space '{space.name}'!",
+            link=f"/spaces/{space.id}/profile"
+        )
+    else:
+        # No prior interest, so send an invitation
+        new_invite = models.Interest(
+            space_id=space_id,
+            user_id=user_id_to_check,
+            startup_id=startup_id_to_check,
+            status=InterestStatus.INVITED
+        )
+        db.add(new_invite)
+        
+        await crud.crud_notification.create_notification(
+            db, user_id=user_id_to_check, type=NotificationType.INVITATION_TO_SPACE,
+            message=f"You have been invited to join the space '{space.name}' by {current_user.full_name}.",
+            link="/notifications" # Or a dedicated invitations page
+        )
+
     await db.commit()
 
 async def check_admin_space_permission(db: AsyncSession, *, current_user: models.User, space_id: int) -> models.SpaceNode:
@@ -86,56 +107,57 @@ async def search_waitlisted_profiles(db: AsyncSession, *, query: str) -> List[mo
     return users
 
 async def browse_waitlist(
-    db: AsyncSession, *, search: Optional[str], type: Optional[str], sort_by: Optional[str], skip: int, limit: int, current_user: models.User
+    db: AsyncSession,
+    *,
+    search: Optional[str],
+    type: Optional[str],
+    sort_by: Optional[str],
+    skip: int,
+    limit: int,
+    current_user: models.User,
+    space_id: Optional[int] = None,
 ) -> List[Union[schemas.admin.WaitlistedUser, schemas.admin.WaitlistedStartup]]:
-    # Get all spaces for the admin's company to find relevant interests
-    company_spaces = await crud.crud_space.get_by_company_id(db, company_id=current_user.company_id)
-    space_ids = [space.id for space in company_spaces]
+    logger.info(f"--- Starting browse_waitlist execution for space_id: {space_id} ---")
     
-    interest_map = {}
-    if space_ids:
-        interests = await crud.crud_interest.interest.get_interests_for_spaces(db, space_ids=space_ids)
-        for interest in interests:
-            if interest.status == InterestStatus.PENDING:
-                interest_map[interest.user_id] = interest.id
-
+    filter_by_interest = sort_by == "interest"
+    
     results = []
-    # Fetch freelancers
-    if type == 'freelancer' or not type:
-        freelancers = await crud.crud_user.get_users(
-            db, skip=skip, limit=limit, user_type=UserRole.FREELANCER,
-            status=UserStatus.WAITLISTED, search_term=search
+    if not type or type == 'freelancer':
+        freelancers_data = await crud.crud_user.get_waitlisted_freelancers(
+            db,
+            search_term=search,
+            space_id=space_id,
+            filter_by_interest=filter_by_interest,
         )
-        for user in freelancers:
-            waitlisted_user = schemas.admin.WaitlistedUser.model_validate(user)
-            if user.id in interest_map:
-                waitlisted_user.expressed_interest = True
-                waitlisted_user.interest_id = interest_map[user.id]
-            results.append(waitlisted_user)
+        for data in freelancers_data:
+            results.append(schemas.admin.WaitlistedUser.model_validate(data))
 
-    # Fetch startups
-    if type == 'startup' or not type:
-        startups = await crud.crud_organization.get_startups_by_status(
-            db, status=UserStatus.WAITLISTED, skip=skip, limit=limit, search_term=search
+    if not type or type == 'startup':
+        startups_data = await crud.crud_organization.get_waitlisted_startups(
+            db,
+            search_term=search,
+            space_id=space_id,
+            filter_by_interest=filter_by_interest,
         )
-        for startup in startups:
-            # The "interest" is expressed by the startup admin
-            startup_admin = next((member for member in startup.direct_members if member.role == UserRole.STARTUP_ADMIN), None)
-            waitlisted_startup = schemas.admin.WaitlistedStartup.model_validate(startup)
-            if startup_admin and startup_admin.id in interest_map:
-                waitlisted_startup.expressed_interest = True
-                waitlisted_startup.interest_id = interest_map[startup_admin.id]
-            results.append(waitlisted_startup)
-
-    # Sort results
-    if sort_by == "name_desc":
-        results.sort(key=lambda x: x.full_name if hasattr(x, 'full_name') else x.name, reverse=True)
-    elif sort_by == "name_asc":
-        results.sort(key=lambda x: x.full_name if hasattr(x, 'full_name') else x.name)
-    else: # Default sort: expressed interest first
+        for data in startups_data:
+            results.append(schemas.admin.WaitlistedStartup.model_validate(data))
+            
+    # Sorting logic
+    if sort_by == "name_asc":
+        results.sort(key=lambda x: getattr(x, 'name', getattr(x, 'full_name', '') or ''))
+    elif sort_by == "name_desc":
+        results.sort(key=lambda x: getattr(x, 'name', getattr(x, 'full_name', '') or ''), reverse=True)
+    else:  # Default to sorting by interest
+        # Sort by name first for a stable secondary sort order
+        results.sort(key=lambda x: getattr(x, 'name', getattr(x, 'full_name', '') or ''))
+        # Then sort by interest status, which becomes the primary sort order
         results.sort(key=lambda x: x.expressed_interest, reverse=True)
     
-    return results[:limit]
+    logger.info("--- Finished browse_waitlist execution ---")
+    
+    # Apply pagination AFTER sorting
+    paginated_results = results[skip : skip + limit]
+    return paginated_results
 
 async def update_startup_info(
     db: AsyncSession, *, space_id: int, startup_id: int, startup_update: StartupUpdateAdmin, current_user: models.User

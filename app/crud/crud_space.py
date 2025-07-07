@@ -672,13 +672,22 @@ async def get_space_with_images(db: AsyncSession, *, space_id: int) -> Optional[
     result = await db.execute(stmt)
     return result.scalars().first()
 
+async def create_space_image(db: AsyncSession, *, obj_in: schemas.space.SpaceImageCreate) -> models.SpaceImage:
+    """Creates a new space image record in the database."""
+    db_obj = models.SpaceImage(**obj_in.model_dump())
+    db.add(db_obj)
+    await db.commit()
+    await db.refresh(db_obj)
+    return db_obj
+
 async def get_space_image(db: AsyncSession, *, image_id: int) -> Optional[models.SpaceImage]:
     """Gets a single space image by its ID."""
-    return await db.get(models.SpaceImage, image_id)
+    result = await db.execute(select(models.SpaceImage).where(models.SpaceImage.id == image_id))
+    return result.scalars().first()
 
 async def delete_space_image(db: AsyncSession, *, image_id: int) -> bool:
     """Deletes a space image by its ID."""
-    image = await db.get(models.SpaceImage, image_id)
+    image = await get_space_image(db, image_id=image_id)
     if not image:
         return False
     await db.delete(image)

@@ -13,9 +13,13 @@ class Conversation(Base):
     id = Column(Integer, primary_key=True, index=True)
     created_at = Column(DateTime, default=func.now())
     is_external = Column(Boolean, default=False, server_default=text("false"), nullable=False)
+    last_message_id = Column(Integer, ForeignKey("chat_messages.id"), nullable=True)
+
     # participants relationship (many-to-many via ConversationParticipant)
     participants = relationship("User", secondary="conversation_participants", back_populates="conversations")
-    messages = relationship("ChatMessage", back_populates="conversation", order_by="ChatMessage.created_at")
+    messages = relationship("ChatMessage", back_populates="conversation", order_by="ChatMessage.created_at", foreign_keys="[ChatMessage.conversation_id]")
+    last_message = relationship("ChatMessage", foreign_keys=[last_message_id])
+
 
 class ConversationParticipant(Base):
     __tablename__ = "conversation_participants"

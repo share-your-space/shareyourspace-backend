@@ -5,7 +5,7 @@ from typing import List, Optional
 from app.db.session import get_db
 from app import models, schemas, services
 from app.dependencies import get_current_user, get_current_active_user
-from app.utils import storage
+from app.utils.storage import gcs_storage
 
 router = APIRouter()
 
@@ -47,17 +47,11 @@ async def get_space_profile(
     space = await services.space_service.get_space_profile(db, space_id=space_id)
     response = schemas.space.SpaceProfile.model_validate(space)
     if response.images:
-        response.images = [
-            schemas.space.SpaceImageSchema(
-                id=img.id,
-                image_url=storage.generate_gcs_signed_url(img.image_url),
-                created_at=img.created_at,
-            )
-            for img in space.images
-        ]
+        for img in response.images:
+            img.image_url = gcs_storage.generate_signed_url(img.image_url)
 
     if response.company and response.company.logo_url:
-        response.company.logo_url = storage.generate_gcs_signed_url(
+        response.company.logo_url = gcs_storage.generate_signed_url(
             response.company.logo_url
         )
 

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel, Field, EmailStr, model_validator
 from typing import List, Optional
 from datetime import datetime
 from app.models.enums import UserStatus, UserRole
@@ -141,4 +141,16 @@ class WaitlistedUser(UserSchema):
 
 class WaitlistedStartup(StartupSchema):
     expressed_interest: bool = False
-    interest_id: Optional[int] = None 
+    interest_id: Optional[int] = None
+
+class AddTenantRequest(BaseModel):
+    user_id: Optional[int] = None
+    startup_id: Optional[int] = None
+
+    @model_validator(mode='before')
+    def check_one_id_present(cls, values):
+        if not values.get('user_id') and not values.get('startup_id'):
+            raise ValueError('Either user_id or startup_id must be provided.')
+        if values.get('user_id') and values.get('startup_id'):
+            raise ValueError('Only one of user_id or startup_id should be provided.')
+        return values 

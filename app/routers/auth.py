@@ -48,14 +48,24 @@ async def register_corporate_admin(
 async def register_startup_admin(
     admin_in: StartupAdminCreate, db: AsyncSession = Depends(get_db)
 ):
-    startup = await crud.crud_organization.create_startup(db=db, obj_in=admin_in.startup_data)
-    await services.auth_service.register_user_and_send_verification(
+    # First, create the user record
+    user = await services.auth_service.register_user_and_send_verification(
         db=db,
         user_in=admin_in.user_data,
         role=UserRole.STARTUP_ADMIN,
         user_status=UserStatus.PENDING_VERIFICATION,
-        startup_id=startup.id,
     )
+
+    # Then, create the startup and associate the admin user
+    startup = await crud.crud_organization.create_startup(
+        db=db, obj_in=admin_in.startup_data, admin_user=user
+    )
+
+    # Manually update the user's startup_id after the startup is created
+    user.startup_id = startup.id
+    db.add(user)
+    await db.commit()
+
     return schemas.Message(message="Registration successful. Please check your email to verify your account.")
 
 @router.get("/verify-email", response_model=schemas.Message)

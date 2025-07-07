@@ -23,6 +23,23 @@ class CRUDInterest(CRUDBase[Interest, InterestCreate, InterestUpdate]):
         result = await db.execute(statement)
         return result.scalar_one_or_none()
 
+    async def get_by_tenant_and_space(
+        self, db: AsyncSession, *, user_id: int, startup_id: Optional[int], space_id: int
+    ) -> Optional[Interest]:
+        """
+        Get an interest by the tenant (either user or startup) and space ID.
+        """
+        statement = select(self.model).where(
+            self.model.space_id == space_id
+        )
+        if startup_id:
+            statement = statement.where(self.model.startup_id == startup_id)
+        else:
+            statement = statement.where(self.model.user_id == user_id, self.model.startup_id.is_(None))
+        
+        result = await db.execute(statement)
+        return result.scalar_one_or_none()
+
     async def create_with_user_and_space(
         self, db: AsyncSession, *, obj_in: InterestCreate, user_id: int
     ) -> Interest:
@@ -95,9 +112,8 @@ class CRUDInterest(CRUDBase[Interest, InterestCreate, InterestUpdate]):
         result = await db.execute(
             select(self.model)
             .options(
-                selectinload(self.model.user)
-                .selectinload(User.startup)
-                .selectinload(Startup.direct_members)
+                selectinload(self.model.user).selectinload(User.startup).selectinload(Startup.direct_members),
+                selectinload(self.model.space)
             )
             .filter(self.model.id == id)
         )

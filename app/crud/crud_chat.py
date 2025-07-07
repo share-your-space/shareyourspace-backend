@@ -57,9 +57,10 @@ async def get_or_create_conversation(
         .options(
             selectinload(Conversation.participants).selectinload(User.profile),
             selectinload(Conversation.participants).selectinload(User.company),
-            selectinload(Conversation.participants).selectinload(User.startup),
+            selectinload(Conversation.participants)
+            .selectinload(User.startup)
+            .selectinload(models.organization.Startup.direct_members),
             selectinload(Conversation.participants).selectinload(User.space),
-            selectinload(Conversation.participants).selectinload(User.managed_space),
         )
     )
     result = await db.execute(final_stmt)

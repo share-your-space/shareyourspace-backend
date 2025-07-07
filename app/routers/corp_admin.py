@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Request
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Request, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional, Union
 
@@ -76,36 +76,31 @@ async def browse_waitlist(
     current_user: models.User = Depends(get_current_active_user),
     search: Optional[str] = None,
     type: Optional[str] = None,
-    sort_by: Optional[str] = None,
+    sort_by: Optional[str] = Query(None, alias="sortBy"),
+    space_id: Optional[int] = Query(None, alias="spaceId"),
     skip: int = 0,
     limit: int = 20,
 ):
     """Allows Corporate Admins to browse waitlisted users and startups, ranked by interest."""
     return await services.corp_admin_service.browse_waitlist(
-        db=db, search=search, type=type, sort_by=sort_by, skip=skip, limit=limit, current_user=current_user
+        db=db, search=search, type=type, sort_by=sort_by, skip=skip, limit=limit, current_user=current_user, space_id=space_id,
     )
 
-@router.post(
-    "/spaces/{space_id}/interests/{interest_id}/approve",
-    response_model=schemas.Message,
-    status_code=status.HTTP_200_OK,
-    summary="Approve an interest request",
-)
-async def approve_interest(
+@router.post("/spaces/{space_id}/add-tenant", response_model=schemas.Message)
+async def add_tenant_to_space(
     space_id: int,
-    interest_id: int,
+    tenant_data: schemas.admin.AddTenantRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: models.User = Depends(
-        get_current_user_with_roles([UserRole.CORP_ADMIN])
-    ),
+    current_user: models.User = Depends(get_current_active_user),
 ):
-    """
-    Approves an interest request from a user, adding them or their startup to the managed space.
-    """
-    await services.corp_admin_service.approve_interest(
-        db=db, interest_id=interest_id, space_id=space_id, current_user=current_user
+    """Adds a freelancer or startup to a managed space."""
+    await services.corp_admin_service.add_tenant_to_space(
+        db=db,
+        space_id=space_id,
+        tenant_data=tenant_data,
+        current_user=current_user,
     )
-    return {"message": "Interest approved and user has been added to the space."}
+    return {"message": "Tenant successfully added to the space."}
 
 
 @router.put("/spaces/{space_id}/startups/{startup_id}", response_model=StartupSchema)
@@ -155,10 +150,27 @@ async def list_space_tenants(
     sort_by: Optional[str] = None,
 ):
     """List Startups and Freelancers assigned to a specific managed space."""
-    tenants = await services.corp_admin_service.get_space_tenants(
+    tenants_from_db = await services.corp_admin_service.get_space_tenants(
         db, space_id=space_id, current_user=current_user, search=search, sort_by=sort_by
     )
-    return schemas.SpaceTenantResponse(tenants=tenants)
+
+    tenant_infos = []
+    for tenant in tenants_from_db:
+        if isinstance(tenant, models.Startup):
+            tenant_infos.append(
+                schemas.space.StartupTenantInfo(
+                    details=tenant,
+                    member_count=len(tenant.direct_members)
+                )
+            )
+        elif isinstance(tenant, models.User):
+            tenant_infos.append(
+                schemas.space.FreelancerTenantInfo(
+                    details=tenant
+                )
+            )
+
+    return schemas.SpaceTenantResponse(tenants=tenant_infos)
 
 @router.post("/spaces/{space_id}/workstations", response_model=schemas.Workstation)
 async def create_workstation(

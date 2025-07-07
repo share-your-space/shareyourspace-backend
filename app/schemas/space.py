@@ -268,6 +268,7 @@ class SpaceProfileUpdate(BaseModel):
     address: Optional[str] = None
     amenities: Optional[List[str]] = None
     house_rules: Optional[str] = None
+    images: Optional[List[SpaceImageSchema]] = None
     vibe: Optional[str] = None
     opening_hours: Optional[dict] = None
     key_highlights: Optional[List[str]] = None

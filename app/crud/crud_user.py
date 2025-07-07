@@ -17,8 +17,65 @@ from app.core.config import settings
 from app.models.organization import Company, Startup
 from app.schemas.organization import CompanyCreate, CompanyUpdate, StartupCreate, StartupUpdate
 from app import models
+from app.models.interest import Interest
 
 logger = logging.getLogger(__name__)
+
+async def get_waitlisted_freelancers(
+    db: AsyncSession,
+    *,
+    search_term: Optional[str] = None,
+    space_id: Optional[int] = None,
+    filter_by_interest: bool = False,
+) -> List[Dict[str, Any]]:
+    """
+    Fetches waitlisted freelancers with optional filtering and annotates them
+    with interest information for a specific space.
+    """
+    # Base join condition for the outerjoin
+    join_conditions = [
+        Interest.user_id == User.id,
+        Interest.status == "PENDING",
+    ]
+    if space_id is not None:
+        join_conditions.append(Interest.space_id == space_id)
+
+    # Base statement for waitlisted freelancers
+    stmt = (
+        select(
+            User,
+            Interest.id.label("interest_id"),
+            (Interest.id != None).label("expressed_interest"),
+        )
+        .outerjoin(
+            Interest,
+            and_(*join_conditions),
+        )
+        .where(User.role == UserRole.FREELANCER, User.status == UserStatus.WAITLISTED)
+    )
+
+    if filter_by_interest:
+        stmt = stmt.where(Interest.id.isnot(None))
+
+    if search_term:
+        stmt = stmt.where(
+            or_(
+                User.full_name.ilike(f"%{search_term}%"),
+                User.email.ilike(f"%{search_term}%"),
+            )
+        )
+
+    result = await db.execute(stmt)
+    
+    # Process results into a list of dictionaries to preserve annotations
+    freelancers = []
+    for row in result.all():
+        user_data = row.User.__dict__
+        user_data["expressed_interest"] = row.expressed_interest
+        user_data["interest_id"] = row.interest_id
+        freelancers.append(user_data)
+        
+    return freelancers
 
 async def get_user_by_id(
     db: AsyncSession, 
@@ -53,16 +110,24 @@ async def get_user_by_email(db: AsyncSession, *, email: str) -> User | None:
         return None
 
 async def create_user(db: AsyncSession, *, obj_in: UserCreate) -> User:
-    create_data = obj_in.model_dump()
-    password = create_data.pop("password")
-    db_obj = User(
-        **create_data,
-        hashed_password=get_password_hash(password)
+    user_data = obj_in.model_dump()
+    # Hash the password
+    hashed_password = get_password_hash(user_data.pop("password"))
+    user_data["hashed_password"] = hashed_password
+
+    # Create the user object
+    db_user = User(
+        email=user_data.get("email"),
+        hashed_password=user_data.get("hashed_password"),
+        role=user_data.get("role"),
+        full_name=user_data.get("full_name")
     )
-    db.add(db_obj)
+
+    # Add to session and commit
+    db.add(db_user)
     await db.commit()
-    await db.refresh(db_obj)
-    return db_obj
+    await db.refresh(db_user)
+    return db_user
 
 async def update_user_internal(db: AsyncSession, *, db_obj: User, obj_in: UserUpdateInternal) -> User:
     db_obj = await db.merge(db_obj)
@@ -81,6 +146,20 @@ async def update_user_internal(db: AsyncSession, *, db_obj: User, obj_in: UserUp
         await db.rollback()
         logger.error(f"Database error during internal update for user {db_obj.id}: {e}", exc_info=True)
         raise
+
+async def add_user_to_space(db: AsyncSession, *, user_id: int, space_id: int) -> User:
+    """
+    Activates a user and assigns them to a space.
+    """
+    user = await get_user_by_id(db, user_id=user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+
+    user.space_id = space_id
+    user.status = UserStatus.ACTIVE
+    db.add(user)
+    # The commit will be handled by the calling service function.
+    return user
 
 async def update_user_password(db: AsyncSession, *, user: User, new_password: str) -> User:
     logger.info(f"Updating password for user {user.id}")
@@ -177,16 +256,6 @@ async def assign_user_to_space(db: AsyncSession, *, user_id: int, space_id: Opti
         await db.commit()
         await db.refresh(user)
         logger.info(f"User ID: {user_id} successfully assigned to space ID: {space_id}.")
-        if space_id is not None and space:
-            if space.corporate_admin_id and space.corporate_admin_id != user.id:
-                logger.info(f"Creating automatic connection between user {user.id} and space admin {space.corporate_admin_id}.")
-                # Import locally to avoid circular dependency
-                from app.crud import crud_connection
-                await crud_connection.create_accepted_connection(
-                    db=db,
-                    user_one_id=user.id,
-                    user_two_id=space.corporate_admin_id
-                )
         return user
     except SQLAlchemyError as e:
         await db.rollback()
@@ -261,7 +330,8 @@ async def get_users(
     user_type: Optional[UserRole] = None,
     status: Optional[UserStatus] = None,
     space_id: Optional[int] = None,
-    search_term: Optional[str] = None
+    search_term: Optional[str] = None,
+    include_ids: Optional[List[int]] = None,
 ) -> List[User]:
     stmt = select(User)
     if user_type:
@@ -278,6 +348,11 @@ async def get_users(
             )
         )
     
+    if include_ids is not None:
+        if not include_ids:
+            return []
+        stmt = stmt.where(User.id.in_(include_ids))
+
     stmt = stmt.offset(skip).limit(limit)
     # Always eager load relationships to prevent lazy loading issues
     stmt = stmt.options(
@@ -461,7 +536,6 @@ async def disassociate_all_employees_from_company(db: AsyncSession, *, company_i
         .execution_options(synchronize_session=False)
     )
     await db.execute(stmt)
-    await db.commit()
 
 # Wrapper class to mimic the old CRUD object structure for compatibility
 class CrudUserWrapper:
@@ -496,5 +570,7 @@ class CrudUserWrapper:
         self.get_users_by_company_and_role = get_users_by_company_and_role
         self.bulk_update_user_status_and_space = bulk_update_user_status_and_space
         self.disassociate_all_employees_from_company = disassociate_all_employees_from_company
+        self.add_user_to_space = add_user_to_space
+        self.get_waitlisted_freelancers = get_waitlisted_freelancers
 
 crud_user = CrudUserWrapper()

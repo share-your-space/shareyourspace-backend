@@ -1,10 +1,10 @@
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 from sqlalchemy import update
 from sqlalchemy.future import select
 from sqlalchemy.orm import Session, selectinload # Changed from AsyncSession for now if using Session
 from sqlalchemy.ext.asyncio import AsyncSession # Keep if truly async
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, and_
 
 from app.models.organization import Company, Startup
 from app.schemas.organization import CompanyCreate, CompanyUpdate, StartupCreate, StartupUpdate
@@ -16,6 +16,7 @@ from app.schemas.user import UserCreate, UserUpdateInternal
 from app.crud.crud_connection import create_accepted_connection
 import logging
 from app.crud import crud_space  # Local import to avoid circular dependency
+from app.models.interest import Interest
 
 logger = logging.getLogger(__name__)
 
@@ -109,15 +110,103 @@ async def get_startup(db: AsyncSession, startup_id: int, options: Optional[List]
 
     return startup
 
+async def get_waitlisted_startups(
+    db: AsyncSession,
+    *,
+    search_term: Optional[str] = None,
+    space_id: Optional[int] = None,
+    filter_by_interest: bool = False,
+) -> List[Dict[str, Any]]:
+    """
+    Fetches waitlisted startups with optional filtering and annotates them
+    with interest information for a specific space.
+    """
+    # Base join condition for the outerjoin
+    join_conditions = [
+        Interest.startup_id == Startup.id,
+        Interest.status == "PENDING",
+    ]
+    if space_id is not None:
+        join_conditions.append(Interest.space_id == space_id)
+
+    stmt = (
+        select(
+            Startup,
+            Interest.id.label("interest_id"),
+            (Interest.id != None).label("expressed_interest"),
+        )
+        .outerjoin(
+            Interest,
+            and_(*join_conditions),
+        )
+        .options(selectinload(Startup.direct_members).selectinload(User.profile))
+        .where(Startup.status == UserStatus.WAITLISTED)
+    )
+
+    if filter_by_interest:
+        stmt = stmt.where(Interest.id.isnot(None))
+
+    if search_term:
+        stmt = stmt.filter(
+            or_(
+                Startup.name.ilike(f"%{search_term}%"),
+                Startup.description.ilike(f"%{search_term}%"),
+            )
+        )
+
+    result = await db.execute(stmt)
+
+    startups = []
+    for row in result.all():
+        startup_data = row.Startup.__dict__
+        startup_data["expressed_interest"] = row.expressed_interest
+        startup_data["interest_id"] = row.interest_id
+        startups.append(startup_data)
+        
+    return startups
+
+
 async def get_startup_by_name(db: AsyncSession, name: str) -> Optional[Startup]:
     result = await db.execute(select(Startup).filter(Startup.name == name))
     return result.scalars().first()
 
-async def get_startups(db: AsyncSession, skip: int = 0, limit: int = 100) -> List[Startup]:
-    result = await db.execute(select(Startup).offset(skip).limit(limit))
+async def get_startups(
+    db: AsyncSession,
+    *,
+    status: Optional[UserStatus] = None,
+    skip: int = 0,
+    limit: int = 100,
+    search_term: Optional[str] = None,
+    include_ids: Optional[List[int]] = None,
+) -> List[Startup]:
+    """
+    Fetches startups with optional filtering by status, search term, and a specific list of IDs.
+    """
+    stmt = select(Startup).options(
+        selectinload(Startup.direct_members).selectinload(User.profile)
+    )
+
+    if status:
+        stmt = stmt.filter(Startup.status == status)
+
+    if include_ids is not None:
+        if not include_ids:
+            return []  # If a filter list is provided and it's empty, return no results.
+        stmt = stmt.filter(Startup.id.in_(include_ids))
+
+    if search_term:
+        stmt = stmt.filter(
+            or_(
+                Startup.name.ilike(f"%{search_term}%"),
+                Startup.description.ilike(f"%{search_term}%"),
+            )
+        )
+    stmt = stmt.offset(skip).limit(limit)
+    result = await db.execute(stmt)
     return result.scalars().all()
 
-async def create_startup(db: AsyncSession, *, obj_in: StartupCreate) -> Startup:
+
+async def create_startup(db: AsyncSession, *, obj_in: StartupCreate, admin_user: User) -> Startup:
     obj_in_data = obj_in.model_dump()
     if obj_in_data.get("website"):
         obj_in_data["website"] = str(obj_in_data["website"])
@@ -127,6 +216,7 @@ async def create_startup(db: AsyncSession, *, obj_in: StartupCreate) -> Startup:
         obj_in_data["social_media_links"] = {k: str(v) for k, v in obj_in_data["social_media_links"].items()}
 
     db_obj = Startup(**obj_in_data)
+    db_obj.direct_members.append(admin_user)
     db.add(db_obj)
     await db.commit()
     await db.refresh(db_obj)
@@ -174,26 +264,6 @@ async def get_startups_by_space_id(db: AsyncSession, space_id: int) -> list[Star
         .filter(Startup.space_id == space_id)
         .order_by(Startup.name) # Optional: order by name
     )
-    return result.scalars().all()
-
-async def get_startups_by_status(db: AsyncSession, status: UserStatus, skip: int = 0, limit: int = 100, search_term: Optional[str] = None) -> List[Startup]:
-    """Fetches all startups with a given status."""
-    stmt = (
-        select(Startup)
-        .options(selectinload(Startup.direct_members))
-        .filter(Startup.status == status)
-    )
-    if search_term:
-        search_filter = or_(
-            Startup.name.ilike(f"%{search_term}%"),
-            Startup.description.ilike(f"%{search_term}%"),
-            Startup.mission.ilike(f"%{search_term}%"),
-            Startup.industry_focus.ilike(f"%{search_term}%"),
-        )
-        stmt = stmt.filter(search_filter)
-
-    stmt = stmt.offset(skip).limit(limit).order_by(Startup.name)
-    result = await db.execute(stmt)
     return result.scalars().all()
 
 async def remove_startup_member(db: AsyncSession, *, member_to_remove: "User", removing_admin: "User") -> "User":
@@ -269,11 +339,16 @@ async def get_startup_member_count(db: AsyncSession, *, startup_id: int) -> int:
     result = await db.execute(stmt)
     return result.scalar_one()
 
-async def add_startup_to_space(db: AsyncSession, *, startup: Startup, space_id: int) -> Startup:
+async def add_startup_to_space(db: AsyncSession, *, startup_id: int, space_id: int) -> Startup:
     """
     Adds a startup and all its members to a space.
     Updates the status of the startup and its members to ACTIVE.
+    This function does NOT commit the transaction.
     """
+    startup = await get_startup(db, startup_id=startup_id, options=[selectinload(Startup.direct_members)])
+    if not startup:
+        raise ValueError(f"Startup with id {startup_id} not found.")
+
     space = await crud_space.get_space_by_id(db, space_id=space_id)
     if not space:
         raise ValueError(f"Space with id {space_id} not found.")
@@ -292,17 +367,17 @@ async def add_startup_to_space(db: AsyncSession, *, startup: Startup, space_id: 
             
             if space.corporate_admin_id and space.corporate_admin_id != member.id:
                 try:
+                    # Note: This connection creation will be part of the parent transaction
                     await create_accepted_connection(
                         db=db,
                         user_one_id=member.id,
                         user_two_id=space.corporate_admin_id
                     )
-                    logger.info(f"Automatically created connection between startup member {member.id} and corporate admin {space.corporate_admin_id}")
+                    logger.info(f"Staged automatic connection between startup member {member.id} and corporate admin {space.corporate_admin_id}")
                 except Exception as e:
-                    logger.error(f"Failed to create automatic connection for startup member {member.id} with admin {space.corporate_admin_id}: {e}")
+                    logger.error(f"Failed to stage automatic connection for startup member {member.id} with admin {space.corporate_admin_id}: {e}")
     
-    await db.commit()
-    await db.refresh(startup)
+    # No commit here - will be handled by the calling service.
     return startup
 
 async def add_user_to_startup(
@@ -338,9 +413,6 @@ async def add_user_to_startup(
         startup.member_slots_used += 1
         db.add(startup)
 
-    # Auto-connect with the admin who added them
-    await create_accepted_connection(db, user_one_id=updated_user.id, user_two_id=adding_admin.id)
-    
     await db.commit()
     await db.refresh(updated_user)
     return updated_user 

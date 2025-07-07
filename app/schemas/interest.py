@@ -2,7 +2,7 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
 from app.models.enums import InterestStatus
-from .user import User
+from .user import User, BasicUser
 
 class InterestBase(BaseModel):
     space_id: int
@@ -25,6 +25,9 @@ class InterestInDBBase(InterestBase):
 
 class Interest(InterestInDBBase):
     user: User
+
+class InterestWithUserDetails(InterestInDBBase):
+    user: BasicUser
 
 class InterestStatusResponse(BaseModel):
     has_expressed_interest: bool 

@@ -8,7 +8,7 @@ from . import crud_connection # noqa: Import connection CRUD
 from . import crud_notification # noqa: Import notification CRUD
 from . import crud_chat # noqa: Import chat CRUD
 from . import crud_interest # noqa
-from . import crud_user_profile # noqa
+from .crud_user_profile import crud_user_profile # noqa
 from .crud_invitation import invitation # Make invitation instance directly available on crud package
 
 # Add other CRUD modules here as they are created 

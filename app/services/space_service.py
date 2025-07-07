@@ -9,7 +9,7 @@ from app import crud, models, schemas, services
 from app.models.enums import UserStatus, UserRole
 from app.schemas.user import UserUpdateInternal
 from app.services import corp_admin_service
-from app.utils import storage
+from app.utils.storage import gcs_storage
 from fastapi import UploadFile
 
 async def create_space(
@@ -48,9 +48,9 @@ async def get_browseable_spaces(db: AsyncSession, *, current_user: models.User) 
     for space in all_spaces:
         status = interest_map.get(space.id, 'not_interested')
         cover_image_url = None
-        if space.images:
+        if space.images and space.images[0].image_url:
             # Generate a signed URL for the first image as a cover
-            cover_image_url = storage.generate_gcs_signed_url(space.images[0].image_url)
+            cover_image_url = gcs_storage.generate_signed_url(space.images[0].image_url)
 
         browseable_spaces.append(
             schemas.space.BrowseableSpace(
@@ -94,23 +94,22 @@ async def add_image_to_space(
 ) -> models.SpaceImage:
     space = await corp_admin_service.check_admin_space_permission(db, current_user=current_user, space_id=space_id)
     
-    # Logic to upload file to GCS and get the blob name
     unique_filename = f"spaces/{space.id}/{uuid.uuid4()}_{image_file.filename}"
-    blob_name = await run_in_threadpool(
-        storage.upload_file_to_gcs, file=image_file, destination_blob_name=unique_filename
+    
+    blob_name = await gcs_storage.upload_file_async(
+        file=image_file, 
+        blob_name=unique_filename,
+        content_type=image_file.content_type
     )
+
+    if not blob_name:
+        raise HTTPException(status_code=500, detail="Failed to upload image to storage.")
 
     image_create = schemas.space.SpaceImageCreate(space_id=space.id, image_url=blob_name)
     
-    db_obj = models.SpaceImage(**image_create.model_dump())
-    db.add(db_obj)
-    await db.commit()
-    await db.refresh(db_obj)
+    db_obj = await crud.crud_space.create_space_image(db=db, obj_in=image_create)
     
-    # After saving, generate a signed URL for the response
-    signed_url = storage.generate_gcs_signed_url(db_obj.image_url)
-    if signed_url:
-        db_obj.image_url = signed_url
+    db_obj.image_url = gcs_storage.generate_signed_url(db_obj.image_url)
         
     return db_obj
 
@@ -123,7 +122,7 @@ async def delete_image_from_space(
     if not image or image.space_id != space_id:
         raise HTTPException(status_code=404, detail="Image not found in this space.")
         
-    await run_in_threadpool(storage.delete_gcs_blob, blob_name=image.image_url)
+    gcs_storage.delete_blob(blob_name=image.image_url)
     await crud.crud_space.delete_space_image(db, image_id=image_id)
 
 async def get_spaces_by_company_id(db: AsyncSession, *, company_id: int) -> List[models.SpaceNode]:
