@@ -35,10 +35,10 @@ COPY ./test_db_connection.py ./test_db_connection.py
 # Copy alembic files if migrations are run inside the container start script
 COPY ./alembic.ini ./alembic.ini
 COPY ./alembic ./alembic
+COPY ./start.sh ./start.sh
 
 # Expose the port the app runs on
 EXPOSE 8000
 
-# Command to run the application using uvicorn via poetry
-# Ensure your FastAPI app instance is correctly referenced (e.g., app.main:app)
-CMD ["poetry", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"] 
+# Command to run the application using our new start script
+CMD ["/app/start.sh"] 
