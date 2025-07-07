@@ -26,10 +26,19 @@ class GcsStorage:
 
     def _initialize_client(self):
         try:
-            source_credentials, project_id = google.auth.default()
-            effective_project_id = project_id or settings.GOOGLE_CLOUD_PROJECT
-
-            if settings.TARGET_SERVICE_ACCOUNT_EMAIL:
+            # Check if running in a production-like environment (e.g., Render)
+            # where a specific service account file is provided.
+            if settings.GOOGLE_APPLICATION_CREDENTIALS and os.path.exists(settings.GOOGLE_APPLICATION_CREDENTIALS):
+                logger.info(f"Initializing GCS client from service account file: {settings.GOOGLE_APPLICATION_CREDENTIALS}")
+                self.storage_client = storage.Client.from_service_account_json(
+                    settings.GOOGLE_APPLICATION_CREDENTIALS
+                )
+                logger.info("GCS Client initialized using service account JSON.")
+            # Fallback to impersonation for local development
+            elif settings.TARGET_SERVICE_ACCOUNT_EMAIL:
+                logger.info("Using Application Default Credentials for impersonation.")
+                source_credentials, project_id = google.auth.default()
+                effective_project_id = project_id or settings.GOOGLE_CLOUD_PROJECT
                 logger.info(f"Attempting to impersonate Service Account: {settings.TARGET_SERVICE_ACCOUNT_EMAIL}")
                 scoped_credentials = impersonated_credentials.Credentials(
                     source_credentials=source_credentials,
@@ -39,11 +48,9 @@ class GcsStorage:
                 )
                 self.storage_client = storage.Client(credentials=scoped_credentials, project=effective_project_id)
                 logger.info(f"GCS Client initialized with IMPERSONATED credentials for project {effective_project_id}.")
-            elif source_credentials:
-                logger.info(f"Using default Application Default Credentials for project {effective_project_id}.")
-                self.storage_client = storage.Client(credentials=source_credentials, project=effective_project_id)
             else:
-                logger.warning("Could not obtain Google Cloud credentials. GCS client not initialized.")
+                 logger.error("No valid Google Cloud credentials configuration found. GCS client not initialized.")
+                 return # Exit initialization if no credentials found
 
             if self.storage_client and settings.GCS_BUCKET_NAME:
                 self.bucket = self.storage_client.bucket(settings.GCS_BUCKET_NAME)
