@@ -47,8 +47,8 @@ class GcsStorage:
             # Fallback to impersonation for local development
             elif settings.TARGET_SERVICE_ACCOUNT_EMAIL:
                 logger.info("Using Application Default Credentials for impersonation.")
-                source_credentials, project_id = google.auth.default()
-                effective_project_id = project_id or settings.GOOGLE_CLOUD_PROJECT
+            source_credentials, project_id = google.auth.default()
+            effective_project_id = project_id or settings.GOOGLE_CLOUD_PROJECT
                 logger.info(f"Attempting to impersonate Service Account: {settings.TARGET_SERVICE_ACCOUNT_EMAIL}")
                 scoped_credentials = impersonated_credentials.Credentials(
                     source_credentials=source_credentials,
