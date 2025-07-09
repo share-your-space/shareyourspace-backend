@@ -47,8 +47,8 @@ class GcsStorage:
             # Fallback to impersonation for local development
             elif settings.TARGET_SERVICE_ACCOUNT_EMAIL:
                 logger.info("Using Application Default Credentials for impersonation.")
-            source_credentials, project_id = google.auth.default()
-            effective_project_id = project_id or settings.GOOGLE_CLOUD_PROJECT
+                source_credentials, project_id = google.auth.default()
+                effective_project_id = project_id or settings.GOOGLE_CLOUD_PROJECT
                 logger.info(f"Attempting to impersonate Service Account: {settings.TARGET_SERVICE_ACCOUNT_EMAIL}")
                 scoped_credentials = impersonated_credentials.Credentials(
                     source_credentials=source_credentials,
@@ -59,8 +59,10 @@ class GcsStorage:
                 self.storage_client = storage.Client(credentials=scoped_credentials, project=effective_project_id)
                 logger.info(f"GCS Client initialized with IMPERSONATED credentials for project {effective_project_id}.")
             else:
-                 logger.error("No valid Google Cloud credentials configuration found. GCS client not initialized.")
-                 return # Exit initialization if no credentials found
+                # Default case if no credentials are provided
+                logger.info("Initializing GCS client with default credentials (no impersonation or service account file).")
+                self.storage_client = storage.Client()
+                logger.info("GCS Client initialized with default credentials.")
 
             if self.storage_client and settings.GCS_BUCKET_NAME:
                 self.bucket = self.storage_client.bucket(settings.GCS_BUCKET_NAME)
@@ -103,4 +105,4 @@ class GcsStorage:
             blob.delete()
             logger.info(f"Blob {blob_name} deleted successfully from GCS bucket {settings.GCS_BUCKET_NAME}.")
 
-gcs_storage = GcsStorage() 
+gcs_storage = GcsStorage()
