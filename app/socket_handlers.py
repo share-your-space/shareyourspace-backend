@@ -64,22 +64,23 @@ def register_socketio_handlers(sio: socketio.AsyncServer):
     @sio.event
     async def connect(sid, environ, auth):
         """Handles new client connections with authentication."""
-        logger.info(f"Socket.IO client connecting: {sid}")
+        logger.info(f"Connection attempt from {sid}. Auth: {auth}")
 
         token = auth.get('token') if auth else None
 
         if not token:
-             logger.warning(f"Connection attempt refused for {sid}: No token provided in auth")
+             logger.warning(f"Connection refused for {sid}: No token provided.")
              return False
 
+        logger.info(f"Token received from {sid}. Attempting to validate.")
         async with AsyncSessionLocal() as db:
             user_id = await _get_user_from_token(token, db)
 
         if not user_id:
-            logger.warning(f"Socket.IO connection refused for {sid}: Invalid token or user")
+            logger.warning(f"Connection refused for {sid}: Token is invalid or user not found.")
             return False
 
-        logger.info(f"Socket.IO client connected: {sid}, User ID: {user_id}")
+        logger.info(f"Successfully authenticated {sid} for user_id {user_id}.")
         sid_user_map[sid] = user_id
         online_user_ids.add(user_id)
         logger.info(f"Authenticated user {user_id} mapped to sid {sid}. Online users: {len(online_user_ids)}")
@@ -93,14 +94,15 @@ def register_socketio_handlers(sio: socketio.AsyncServer):
     @sio.event
     async def disconnect(sid):
         """Handles client disconnections."""
-        logger.info(f"Socket.IO client disconnected: {sid}")
+        logger.info(f"Disconnecting: {sid}")
         user_id = sid_user_map.pop(sid, None)
         if user_id:
             online_user_ids.discard(user_id)
             logger.info(f"Removed mapping for sid {sid} (User: {user_id}). Online users: {len(online_user_ids)}")
             await sio.emit('user_offline', {'user_id': user_id}, skip_sid=sid)
+            logger.info(f"Emitted user_offline for {user_id}. Remaining online users: {list(online_user_ids)}")
         else:
-            logger.warning(f"No user ID found for disconnected sid {sid}")
+            logger.warning(f"Sid {sid} disconnected but had no user mapping.")
 
     # --- Chat Message Handler ---
     @sio.on('send_message')
@@ -269,4 +271,4 @@ def register_socketio_handlers(sio: socketio.AsyncServer):
 
     # @sio.on('some_event') # Keep or remove the original placeholder as needed
     # async def handle_some_event(sid, data):
-    #     ... 
+    #     ...
