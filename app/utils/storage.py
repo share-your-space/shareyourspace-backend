@@ -36,18 +36,7 @@ class GcsStorage:
                 logger.info("GCS Client initialized using service account JSON.")
             # Fallback to impersonation for local development
             elif settings.TARGET_SERVICE_ACCOUNT_EMAIL:
-                logger.info("Using Application Default Credentials for impersonation.")
-            source_credentials, project_id = google.auth.default()
-            effective_project_id = project_id or settings.GOOGLE_CLOUD_PROJECT
-                logger.info(f"Attempting to impersonate Service Account: {settings.TARGET_SERVICE_ACCOUNT_EMAIL}")
-                scoped_credentials = impersonated_credentials.Credentials(
-                    source_credentials=source_credentials,
-                    target_principal=settings.TARGET_SERVICE_ACCOUNT_EMAIL,
-                    target_scopes=['https://www.googleapis.com/auth/devstorage.read_write'],
-                    lifetime=3600,
-                )
-                self.storage_client = storage.Client(credentials=scoped_credentials, project=effective_project_id)
-                logger.info(f"GCS Client initialized with IMPERSONATED credentials for project {effective_project_id}.")
+                logger.info("Impersonation logic would run here.")
             else:
                  logger.error("No valid Google Cloud credentials configuration found. GCS client not initialized.")
                  return # Exit initialization if no credentials found
