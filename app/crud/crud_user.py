@@ -120,7 +120,8 @@ async def create_user(db: AsyncSession, *, obj_in: UserCreate) -> User:
         email=user_data.get("email"),
         hashed_password=user_data.get("hashed_password"),
         role=user_data.get("role"),
-        full_name=user_data.get("full_name")
+        full_name=user_data.get("full_name"),
+        company_id=user_data.get("company_id")
     )
 
     # Add to session and commit
