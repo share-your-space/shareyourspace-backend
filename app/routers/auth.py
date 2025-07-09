@@ -35,9 +35,13 @@ async def register_corporate_admin(
     admin_in: CorporateAdminCreate, db: AsyncSession = Depends(get_db)
 ):
     company = await crud.crud_organization.create_company(db=db, obj_in=admin_in.company_data)
+
+    user_create_data = admin_in.user_data
+    user_create_data.company_id = company.id
+
     await services.auth_service.register_user_and_send_verification(
         db=db,
-        user_in=admin_in.user_data,
+        user_in=user_create_data,
         role=UserRole.CORP_ADMIN,
         user_status=UserStatus.PENDING_VERIFICATION,
         company_id=company.id,
