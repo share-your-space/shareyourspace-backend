@@ -9,10 +9,13 @@ logger = logging.getLogger(__name__)
 
 def send_email(to: str, subject: str, html_content: str) -> None:
     """Sends an email using the Resend service."""
-    if not settings.RESEND_API_KEY or not settings.RESEND_API_KEY.get_secret_value(): # Check if key itself or its value is missing
+    if not settings.RESEND_API_KEY:
         logger.error("RESEND_API_KEY is not configured or is empty. Cannot send email.")
-        # In a real application, you might want to raise an exception
-        # or handle this more gracefully depending on requirements.
+        logger.warning("--- DEVELOPMENT EMAIL-SENDING FALLBACK ---")
+        logger.warning(f"To: {to}")
+        logger.warning(f"Subject: {subject}")
+        logger.warning(f"HTML Content (verification link is inside):\n{html_content}")
+        logger.warning("--- END DEVELOPMENT EMAIL-SENDING FALLBACK ---")
         return
     else:
         logger.info(f"RESEND_API_KEY found. Attempting to send email to: {to} with subject: '{subject}' from: {settings.EMAIL_FROM_ADDRESS}")
