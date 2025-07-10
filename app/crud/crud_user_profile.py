@@ -59,13 +59,19 @@ class CRUDUserProfile(CRUDBase[UserProfile, UserProfileCreate, UserProfileUpdate
     async def update_profile_with_embedding_generation(
         self, db: AsyncSession, *, db_obj: UserProfile, obj_in: UserProfileUpdate
     ) -> UserProfile:
-        logger.info(f"Updating profile for user_id: {db_obj.user_id} with obj_in: {obj_in.model_dump_json()}")
+        logger.info(f"--- CRUD: Updating profile for user_id: {db_obj.user_id} ---")
+        logger.info(f"Incoming data: {obj_in.model_dump_json(exclude_unset=True)}")
+        logger.info(f"Original DB object state: {db_obj.__dict__}")
 
-        for field, value in obj_in.model_dump(exclude_none=True).items():
+        update_data = obj_in.model_dump(exclude_unset=True)
+
+        for field, value in update_data.items():
             if hasattr(db_obj, field):
                 value_to_assign = str(value) if isinstance(value, HttpUrl) else value
                 setattr(db_obj, field, value_to_assign)
-                logger.debug(f"Profile for user {db_obj.user_id}: Directly setting {field} to {value_to_assign}")
+                logger.info(f"Profile for user {db_obj.user_id}: Setting '{field}' to '{value_to_assign}'")
+
+        logger.info(f"DB object state before embedding generation: {db_obj.__dict__}")
 
         profile_text_parts = [
             str(db_obj.title or ""),
@@ -83,23 +89,24 @@ class CRUDUserProfile(CRUDBase[UserProfile, UserProfileCreate, UserProfileUpdate
             logger.info(f"Attempting to generate embedding for user_id: {db_obj.user_id}.")
             embedding = generate_embedding(profile_text)
             if embedding is not None:
-                db_obj.profile_vector = embedding
+                # db_obj.profile_vector = embedding # Deactivated for now
                 logger.info(f"Embedding updated for user_id: {db_obj.user_id}.")
             else:
+                # db_obj.profile_vector = None # Deactivated for now
                 logger.warning(f"Embedding generation returned None for user_id: {db_obj.user_id}. Vector not updated.")
-                db_obj.profile_vector = None
         else:
             logger.info(f"No text content for embedding for user_id: {db_obj.user_id}. Clearing vector.")
-            db_obj.profile_vector = None
+            # db_obj.profile_vector = None # Deactivated for now
 
         try:
             db.add(db_obj)
             await db.commit()
             await db.refresh(db_obj)
-            logger.info(f"Profile for user_id: {db_obj.user_id} committed successfully. Title after commit: '{db_obj.title}'")
+            logger.info(f"--- CRUD: Profile for user_id: {db_obj.user_id} committed successfully ---")
+            logger.info(f"Final DB object state after refresh: {db_obj.__dict__}")
         except Exception as e:
             await db.rollback()
-            logger.error(f"Database commit/refresh failed for profile update of user_id {db_obj.user_id}: {e}", exc_info=True)
+            logger.error(f"--- CRUD: Database commit/refresh failed for profile update of user_id {db_obj.user_id}: {e} ---", exc_info=True)
 
         return db_obj
 

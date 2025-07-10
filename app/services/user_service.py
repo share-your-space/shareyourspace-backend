@@ -99,6 +99,8 @@ async def update_user_profile(
     user: models.User,
     profile_in: schemas.UserProfileUpdate,
 ) -> models.UserProfile:
+    logger.info(f"--- Updating User Profile for User ID: {user.id} ---")
+    logger.info(f"Incoming update data: {profile_in.model_dump_json(exclude_unset=True)}")
     if not user.profile:
         logger.warning(f"User {user.id} has no profile, creating one.")
         new_profile = await crud.crud_user_profile.create_with_owner(
@@ -109,10 +111,13 @@ async def update_user_profile(
     update_data = profile_in.model_dump(exclude_unset=True)
 
     if not update_data:
+        logger.warning("Update called with no data to update.")
         return user.profile
 
+    logger.info(f"Calling CRUD to update profile. Data: {update_data}")
     updated_profile = await crud.crud_user_profile.update_profile_with_embedding_generation(
         db=db, db_obj=user.profile, obj_in=profile_in
     )
+    logger.info(f"--- User Profile Update Finished for User ID: {user.id} ---")
 
-    return updated_profile 
+    return updated_profile
