@@ -15,10 +15,12 @@ from app.crud.crud_user import create_user, get_user_by_email, update_user_inter
 from app.schemas.user import UserCreate, UserUpdateInternal
 from app.crud.crud_connection import create_accepted_connection
 import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 from app.crud import crud_space  # Local import to avoid circular dependency
 from app.models.interest import Interest
-
-logger = logging.getLogger(__name__)
 
 # CRUD for Company
 async def get_company(db: AsyncSession, company_id: int) -> Optional[Company]:
@@ -60,7 +62,11 @@ async def create_company(db: AsyncSession, *, obj_in: CompanyCreate) -> Company:
     return db_obj
 
 async def update_company(db: AsyncSession, *, db_obj: Company, obj_in: CompanyUpdate) -> Company:
+    logger.info(f"--- Updating Company (ID: {db_obj.id}) ---")
+    logger.info(f"Original object: {db_obj.__dict__}")
+    
     update_data = obj_in.model_dump(exclude_unset=True)
+    logger.info(f"Update data received from frontend: {update_data}")
 
     # Convert HttpUrl fields to strings before saving
     if 'website' in update_data and update_data['website']:
@@ -70,9 +76,15 @@ async def update_company(db: AsyncSession, *, db_obj: Company, obj_in: CompanyUp
 
     for field, value in update_data.items():
         setattr(db_obj, field, value)
+    
+    logger.info(f"Object state before commit: {db_obj.__dict__}")
+
     db.add(db_obj)
     await db.commit()
     await db.refresh(db_obj)
+
+    logger.info(f"Object state after refresh from DB: {db_obj.__dict__}")
+
     # Eager load admin after update
     db_obj.admin = await get_admin_for_company(db, company_id=db_obj.id)
     return db_obj
@@ -223,7 +235,11 @@ async def create_startup(db: AsyncSession, *, obj_in: StartupCreate, admin_user:
     return db_obj
 
 async def update_startup(db: AsyncSession, *, db_obj: Startup, obj_in: StartupUpdate) -> Startup:
+    logger.info(f"--- Updating Startup (ID: {db_obj.id}) ---")
+    logger.info(f"Original object: {db_obj.__dict__}")
+    
     update_data = obj_in.model_dump(exclude_unset=True)
+    logger.info(f"Update data received from frontend: {update_data}")
 
     # Convert HttpUrl fields to strings before saving
     if 'website' in update_data and update_data['website']:
@@ -235,9 +251,15 @@ async def update_startup(db: AsyncSession, *, db_obj: Startup, obj_in: StartupUp
         
     for field, value in update_data.items():
         setattr(db_obj, field, value)
+
+    logger.info(f"Object state before commit: {db_obj.__dict__}")
+    
     db.add(db_obj)
     await db.commit()
     await db.refresh(db_obj)
+
+    logger.info(f"Object state after refresh from DB: {db_obj.__dict__}")
+
     # Eager load admin after update
     db_obj.admin = await get_admin_for_startup(db, startup_id=db_obj.id)
     return db_obj
@@ -439,4 +461,4 @@ async def bulk_update_startup_space(db: AsyncSession, *, startup_ids: List[int],
 #     #     select(Company).join(User).filter(Company.admin_id == user_id)
 #     # )
 #     # return result.scalars().first()
-#     pass 
+#     pass
