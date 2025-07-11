@@ -22,6 +22,7 @@ from .chat import ChatMessage, Conversation, MessageReaction # Add ChatMessage m
 from .invitation import Invitation, InvitationStatus # Add this line
 from .referral import Referral # Add this line
 from .interest import Interest # noqa
+from .booking import Booking, BookingStatus # noqa
 
 # You can also import all your models here later so Alembic can find them
 # e.g., from .item import Item 
@@ -53,6 +54,8 @@ __all__ = [
     "ConnectionRequest",
     "Invitation", # Add this line
     "InvitationStatus", # Add this line
+    "Booking",
+    "BookingStatus",
     # Enums if they are defined in separate files and imported here, or directly if here.
     "OrganizationRole",
     "UserStatus",
@@ -62,4 +65,4 @@ __all__ = [
     "NotificationStatus",
     "UserChatRoomRole",
     "SpaceImage"
-] 
+]
