@@ -2,15 +2,16 @@ from pydantic import BaseModel
 from datetime import datetime
 from typing import Optional
 
-from app.schemas.user import UserSimpleInfo
-from app.schemas.workstation import Workstation
+from .user import BasicUser
 
 class Booking(BaseModel):
     id: int
-    start_date: datetime
-    end_date: Optional[datetime] = None
-    user: UserSimpleInfo
-    workstation: Workstation
+    user_id: int
+    workstation_id: int
+    start_time: datetime
+    end_time: datetime
+    status: str
+    user: BasicUser
 
     class Config:
-        orm_mode = True
+        from_attributes = True

@@ -29,6 +29,3 @@ class BillingInfo(BaseModel):
 
     class Config:
         orm_mode = True
-
-class SubscriptionUpdate(BaseModel):
-    plan_id: str
