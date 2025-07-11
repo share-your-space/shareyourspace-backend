@@ -1,54 +1,52 @@
 import logging
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, HTTPException, Query, status, UploadFile, File, Request
+from sqlalchemy.ext.asyncio import AsyncSession
+from typing import List, Optional, Union
 
-from app.dependencies import get_db
-from app.models import UserRole
-from app.security import get_current_active_user_with_permissions
-from app.schemas import (
-    DashboardStats,
-    PaginatedBookingsResponse,
-    PaginatedWorkstationsResponse,
-    PaginatedCompanyMembersResponse,
-    PaginatedInvitationsResponse,
-    PaginatedWaitlistResponse,
-    PaginatedTenantsResponse,
-    Activity,
-    PaginatedActivityResponse,
-)
+from app import schemas, models, crud, services
+from app.db.session import get_db
+from app.dependencies import require_corp_admin, get_current_active_user
+from app.models.enums import UserRole
+from app.schemas.admin import AISearchRequest
+from app.schemas.organization import CompanyUpdate
+from app.schemas.dashboard import DashboardStats
+from app.schemas.billing import BillingInfo
+from app.schemas.activity import PaginatedActivityResponse
 from app.services import (
-    AnalyticsService,
-    BillingService,
-    BookingService,
-    CompanyService,
-    CorpAdminService,
-    InvitationService,
-    SpaceService,
-    TenantService,
-    WaitlistService,
-    WorkstationService,
-    ActivityService,
+    billing_service,
+    company_service,
+    corp_admin_service,
+    space_service,
+    analytics_service,
+    activity_service,
 )
 
-router = APIRouter()
+router = APIRouter(
+    tags=["Corporate Admin"],
+    # prefix="/company/{company_id}", # This prefix was causing a double path issue
+    dependencies=[Depends(require_corp_admin)]
+)
+
 logger = logging.getLogger(__name__)
 
 @router.get(
     "/{company_id}/dashboard/stats",
     response_model=DashboardStats,
     summary="Get key statistics for the corporate admin dashboard",
-    dependencies=[Depends(get_current_active_user_with_permissions(UserRole.COMPANY_ADMIN))]
 )
 async def get_dashboard_stats(
     company_id: int,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
 ):
     """
     Retrieves key statistics for the corporate admin dashboard.
     """
+    if not current_user.company_id or current_user.company_id != company_id:
+        raise HTTPException(status_code=403, detail="Admin not associated with this company.")
+    
     try:
-        service = CorpAdminService(db)
-        stats = service.get_dashboard_stats(company_id=company_id)
+        stats = await corp_admin_service.get_dashboard_stats(db, company_id=company_id)
         return stats
     except Exception as e:
         logger.error(f"Error fetching dashboard stats for company {company_id}: {e}", exc_info=True)
@@ -58,51 +56,27 @@ async def get_dashboard_stats(
     "/{company_id}/dashboard/activity",
     response_model=PaginatedActivityResponse,
     summary="Get Recent Company Activity",
-    dependencies=[Depends(get_current_active_user_with_permissions(UserRole.COMPANY_ADMIN))]
 )
-def get_company_activity(
+async def get_company_activity(
     company_id: int,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
     limit: int = Query(10, ge=1, le=50)
 ):
     """
     Retrieves a feed of recent activities for the specified company.
     """
+    if not current_user.company_id or current_user.company_id != company_id:
+        raise HTTPException(status_code=403, detail="Admin not associated with this company.")
     try:
-        activity_service = ActivityService(db)
-        activities = activity_service.get_recent_activity(company_id=company_id, limit=limit)
+        activities = await activity_service.get_recent_activity(db, company_id=company_id, limit=limit)
         return PaginatedActivityResponse(activities=activities, total=len(activities))
     except Exception as e:
         logger.error(f"Error fetching activity for company {company_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
 
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Request, Query
-from sqlalchemy.ext.asyncio import AsyncSession
-from typing import List, Optional, Union
 
-from app import schemas, models, crud, services
-from app.db.session import get_db
-from app.dependencies import require_corp_admin, get_current_active_user, get_current_user_with_roles
-from app.models.enums import UserRole, UserStatus, NotificationType
-from app.schemas.admin import (
-    AISearchRequest,
-    StartupUpdateAdmin,
-    MemberSlotUpdate,
-    SpaceCreate as AdminSpaceCreate,
-)
-from app.schemas.user import User as UserSchema
-from app.schemas.organization import Startup as StartupSchema, Company as CompanySchema, CompanyUpdate
-from app.schemas.dashboard import DashboardStats
-from app.schemas.billing import BillingInfo
-from app.services import billing_service, company_service
-
-router = APIRouter(
-    tags=["Corporate Admin"],
-    prefix="/company/{company_id}",
-    dependencies=[Depends(require_corp_admin)]
-)
-
-@router.get("/settings", response_model=CompanySchema)
+@router.get("/{company_id}/settings", response_model=schemas.Company)
 async def get_company_settings(
     company_id: int,
     db: AsyncSession = Depends(get_db),
@@ -117,7 +91,7 @@ async def get_company_settings(
         raise HTTPException(status_code=404, detail="Company not found")
     return company
 
-@router.put("/settings", response_model=CompanySchema)
+@router.put("/{company_id}/settings", response_model=schemas.Company)
 async def update_company_settings(
     company_id: int,
     company_update: CompanyUpdate,
@@ -131,7 +105,7 @@ async def update_company_settings(
     return await company_service.update_company(db, company_id=company_id, company_update=company_update)
 
 
-@router.get("/tenants", response_model=List[Union[schemas.User, schemas.Startup]])
+@router.get("/{company_id}/tenants", response_model=List[Union[schemas.User, schemas.Startup]])
 async def get_company_tenants(
     company_id: int,
     db: AsyncSession = Depends(get_db),
@@ -141,9 +115,9 @@ async def get_company_tenants(
     if not current_user.company_id or current_user.company_id != company_id:
         raise HTTPException(status_code=403, detail="Admin not associated with this company.")
     
-    return await services.corp_admin_service.get_all_company_tenants(db, company_id=current_user.company_id)
+    return await corp_admin_service.get_all_company_tenants(db, company_id=current_user.company_id)
 
-@router.get("/workstations", response_model=List[schemas.Workstation])
+@router.get("/{company_id}/workstations", response_model=List[schemas.Workstation])
 async def get_company_workstations(
     company_id: int,
     db: AsyncSession = Depends(get_db),
@@ -153,9 +127,9 @@ async def get_company_workstations(
     if not current_user.company_id or current_user.company_id != company_id:
         raise HTTPException(status_code=403, detail="Admin not associated with this company.")
     
-    return await services.corp_admin_service.get_all_company_workstations(db, company_id=current_user.company_id)
+    return await corp_admin_service.get_all_company_workstations(db, company_id=current_user.company_id)
 
-@router.get("/invites", response_model=List[schemas.Invitation])
+@router.get("/{company_id}/invites", response_model=List[schemas.Invitation])
 async def get_company_invites(
     company_id: int,
     db: AsyncSession = Depends(get_db),
@@ -167,7 +141,7 @@ async def get_company_invites(
     
     return await crud.crud_invitation.get_by_company_id(db, company_id=current_user.company_id)
 
-@router.get("/company-members", response_model=List[schemas.User])
+@router.get("/{company_id}/company-members", response_model=List[schemas.User])
 async def get_company_members(
     company_id: int,
     db: AsyncSession = Depends(get_db),
@@ -179,20 +153,7 @@ async def get_company_members(
         
     return await crud.crud_user.get_users_by_company_id(db, company_id=current_user.company_id)
 
-@router.get("/dashboard/stats", response_model=DashboardStats)
-async def get_dashboard_stats(
-    company_id: int,
-    db: AsyncSession = Depends(get_db),
-    current_user: models.User = Depends(get_current_active_user),
-):
-    """Get key statistics for the corporate admin dashboard."""
-    if not current_user.company_id or current_user.company_id != company_id:
-        raise HTTPException(status_code=403, detail="Admin not associated with this company.")
-    
-    stats = await services.corp_admin_service.get_dashboard_stats(db, company_id=current_user.company_id)
-    return stats
-
-@router.get("/spaces", response_model=List[schemas.Space])
+@router.get("/{company_id}/spaces", response_model=List[schemas.Space])
 async def get_company_spaces(
     company_id: int,
     db: AsyncSession = Depends(get_db),
@@ -201,14 +162,14 @@ async def get_company_spaces(
     """Get all spaces belonging to the current admin's company."""
     if not current_user.company_id or current_user.company_id != company_id:
         raise HTTPException(status_code=403, detail="Admin not associated with this company.")
-    return await services.space_service.get_spaces_by_company_id(
+    return await space_service.get_spaces_by_company_id(
         db=db, company_id=current_user.company_id
     )
 
-@router.post("/spaces", response_model=schemas.Space)
+@router.post("/{company_id}/spaces", response_model=schemas.Space)
 async def create_space_for_company(
     company_id: int,
-    space_in: AdminSpaceCreate,
+    space_in: schemas.admin.SpaceCreate,
     db: AsyncSession = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
@@ -221,9 +182,9 @@ async def create_space_for_company(
     # Ensure the space is created for the correct company
     space_in.company_id = current_user.company_id
 
-    return await services.space_service.create_space(db=db, space_in=space_in)
+    return await space_service.create_space(db=db, space_in=space_in)
 
-@router.put("/spaces/{space_id}", response_model=schemas.Space)
+@router.put("/{company_id}/spaces/{space_id}", response_model=schemas.Space)
 async def update_space_details(
     company_id: int,
     space_id: int,
@@ -237,11 +198,11 @@ async def update_space_details(
     if not current_user.company_id or current_user.company_id != company_id:
         raise HTTPException(status_code=403, detail="Admin not associated with this company.")
 
-    return await services.space_service.update_space_details(
+    return await space_service.update_space_details(
         db=db, space_id=space_id, space_update=space_update, company_id=current_user.company_id
     )
 
-@router.post("/spaces/{space_id}/upload-image", response_model=schemas.SpaceImage)
+@router.post("/{company_id}/spaces/{space_id}/upload-image", response_model=schemas.SpaceImage)
 async def upload_space_image(
     company_id: int,
     space_id: int,
@@ -260,27 +221,32 @@ async def upload_space_image(
     if not space or space.company_id != current_user.company_id:
         raise HTTPException(status_code=404, detail="Space not found or not owned by company.")
 
-    return await services.space_service.add_image_to_space(db, space_id=space_id, image_file=file)
+    return await space_service.add_image_to_space(db, space_id=space_id, image_file=file)
 
 @router.post(
-    "/ai-search-waitlist",
+    "/{company_id}/ai-search-waitlist",
     response_model=List[schemas.user.UserDetail],
     status_code=status.HTTP_200_OK,
     summary="Perform AI search on waitlisted user profiles",
 )
 async def ai_search_waitlist(
+    company_id: int,
     search_request: AISearchRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
 ):
     """
     Performs an AI-powered vector search on waitlisted user profiles.
     """
+    if not current_user.company_id or current_user.company_id != company_id:
+        raise HTTPException(status_code=403, detail="Admin not associated with this company.")
+        
     if not search_request.query:
         raise HTTPException(status_code=400, detail="Query cannot be empty.")
 
-    return await services.corp_admin_service.search_waitlisted_profiles(db, query=search_request.query)
+    return await corp_admin_service.search_waitlisted_profiles(db, query=search_request.query)
 
-@router.get("/analytics/overview", response_model=schemas.AnalyticsOverview)
+@router.get("/{company_id}/analytics/overview", response_model=schemas.AnalyticsOverview)
 async def get_analytics_overview(
     company_id: int,
     db: AsyncSession = Depends(get_db),
@@ -289,9 +255,9 @@ async def get_analytics_overview(
     """Get analytics overview for the company."""
     if not current_user.company_id or current_user.company_id != company_id:
         raise HTTPException(status_code=403, detail="Admin not associated with this company.")
-    return await services.analytics_service.get_company_analytics_overview(db, company_id=current_user.company_id)
+    return await analytics_service.get_company_analytics_overview(db, company_id=current_user.company_id)
 
-@router.get("/billing", response_model=BillingInfo)
+@router.get("/{company_id}/billing", response_model=BillingInfo)
 async def get_billing_info(
     company_id: int,
     db: AsyncSession = Depends(get_db),
@@ -303,7 +269,7 @@ async def get_billing_info(
     
     return await billing_service.get_billing_info_for_company(db, company_id=current_user.company_id)
 
-@router.post("/billing/subscription", status_code=status.HTTP_204_NO_CONTENT)
+@router.post("/{company_id}/billing/subscription", status_code=status.HTTP_204_NO_CONTENT)
 async def update_subscription(
     company_id: int,
     subscription_update: schemas.SubscriptionUpdate,
@@ -319,7 +285,7 @@ async def update_subscription(
     )
     return
 
-@router.get("/bookings", response_model=List[schemas.Booking])
+@router.get("/{company_id}/bookings", response_model=List[schemas.Booking])
 async def get_company_bookings(
     company_id: int,
     db: AsyncSession = Depends(get_db),
@@ -329,9 +295,9 @@ async def get_company_bookings(
     if not current_user.company_id or current_user.company_id != company_id:
         raise HTTPException(status_code=403, detail="Admin not associated with this company.")
     
-    return await crud.crud_booking.get_bookings_by_company(db, company_id=current_user.company_id)
+    return await crud.crud_booking.get_bookings_by_company_id(db, company_id=current_user.company_id)
 
-@router.get("/browse-waitlist", response_model=List[Union[schemas.WaitlistedUser, schemas.WaitlistedStartup]])
+@router.get("/{company_id}/browse-waitlist", response_model=List[Union[schemas.WaitlistedUser, schemas.WaitlistedStartup]])
 async def get_browse_waitlist(
     company_id: int,
     db: AsyncSession = Depends(get_db),

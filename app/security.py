@@ -235,3 +235,18 @@ def get_current_user_with_roles(
             detail=detail
         )
     return role_checker 
+
+def get_current_active_user_with_permissions(required_roles: list[UserRole]):
+    """
+    This is a dependency that checks if the current user is active and has one of the required roles.
+    It's a common pattern for protecting endpoints.
+    """
+    async def role_checker(current_user: models.User = Depends(get_current_active_user)) -> models.User:
+        if not current_user.role or current_user.role not in required_roles:
+            required_roles_str = ", ".join([role.value for role in required_roles])
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"User role '{current_user.role.value}' is not authorized. Required roles: {required_roles_str}."
+            )
+        return current_user
+    return role_checker
