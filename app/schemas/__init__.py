@@ -77,6 +77,7 @@ from .workstation import (
     Workstation, WorkstationCreate, WorkstationUpdate, WorkstationAssignment,
     SpaceWorkstationDetail, SpaceWorkstationListResponse
 )
+from .activity import Activity, ActivityCreate, ActivityUpdate, ActivityDetail
 
 # After all models are imported, rebuild the forward references
 User.model_rebuild()

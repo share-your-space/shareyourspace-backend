@@ -1,3 +1,81 @@
+import logging
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
+
+from app.dependencies import get_db
+from app.models import UserRole
+from app.security import get_current_active_user_with_permissions
+from app.schemas import (
+    DashboardStats,
+    PaginatedBookingsResponse,
+    PaginatedWorkstationsResponse,
+    PaginatedCompanyMembersResponse,
+    PaginatedInvitationsResponse,
+    PaginatedWaitlistResponse,
+    PaginatedTenantsResponse,
+    Activity,
+    PaginatedActivityResponse,
+)
+from app.services import (
+    AnalyticsService,
+    BillingService,
+    BookingService,
+    CompanyService,
+    CorpAdminService,
+    InvitationService,
+    SpaceService,
+    TenantService,
+    WaitlistService,
+    WorkstationService,
+    ActivityService,
+)
+
+router = APIRouter()
+logger = logging.getLogger(__name__)
+
+@router.get(
+    "/{company_id}/dashboard/stats",
+    response_model=DashboardStats,
+    summary="Get key statistics for the corporate admin dashboard",
+    dependencies=[Depends(get_current_active_user_with_permissions(UserRole.COMPANY_ADMIN))]
+)
+async def get_dashboard_stats(
+    company_id: int,
+    db: Session = Depends(get_db),
+):
+    """
+    Retrieves key statistics for the corporate admin dashboard.
+    """
+    try:
+        service = CorpAdminService(db)
+        stats = service.get_dashboard_stats(company_id=company_id)
+        return stats
+    except Exception as e:
+        logger.error(f"Error fetching dashboard stats for company {company_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@router.get(
+    "/{company_id}/dashboard/activity",
+    response_model=PaginatedActivityResponse,
+    summary="Get Recent Company Activity",
+    dependencies=[Depends(get_current_active_user_with_permissions(UserRole.COMPANY_ADMIN))]
+)
+def get_company_activity(
+    company_id: int,
+    db: Session = Depends(get_db),
+    limit: int = Query(10, ge=1, le=50)
+):
+    """
+    Retrieves a feed of recent activities for the specified company.
+    """
+    try:
+        activity_service = ActivityService(db)
+        activities = activity_service.get_recent_activity(company_id=company_id, limit=limit)
+        return PaginatedActivityResponse(activities=activities, total=len(activities))
+    except Exception as e:
+        logger.error(f"Error fetching activity for company {company_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Request, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional, Union

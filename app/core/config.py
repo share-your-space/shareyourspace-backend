@@ -31,7 +31,15 @@ class Settings(BaseSettings):
     APPLE_PRIVATE_KEY: SecretStr | None = None
     GOOGLE_AI_API_KEY: SecretStr | None = None
     FRONTEND_URL: str = Field(default="http://localhost:3000", description="Base URL for the frontend application")
-    ALLOWED_ORIGINS: List[str] = ["http://localhost:3000"]
+    ALLOWED_ORIGINS: List[str] = [
+        "http://localhost:3000",
+        "https://shareyourspace-frontend-269495888913.herokuapp.com",
+        "https://shareyourspace-frontend-269495888913.herokuapp.com/",
+        "https://shareyourspace-frontend-git-main-marcel-startups-projects.vercel.app",
+        "https://shareyourspace-frontend-git-main-marcel-startups-projects.vercel.app/",
+        "https://www.shareyourspace.app",
+        "https://shareyourspace.app"
+    ]
     GCS_BUCKET_NAME: str
     TARGET_SERVICE_ACCOUNT_EMAIL: str | None = Field(None, validation_alias='TARGET_SERVICE_ACCOUNT_EMAIL')
     GOOGLE_APPLICATION_CREDENTIALS: Optional[str] = None # Path to service account key file (if not using ADC/impersonation)
@@ -55,4 +63,4 @@ settings = Settings()
 #     logger.warning(f"DEBUG: Loaded SECRET_KEY hash: {hashed_secret}")
 # except Exception as e:
 #     logger.error(f"DEBUG: Could not load/hash SECRET_KEY: {e}")
-# # --- END TEMP DEBUG --- 
+# # --- END TEMP DEBUG ---
