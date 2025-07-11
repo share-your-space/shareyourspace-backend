@@ -11,4 +11,5 @@ from . import connection_service
 from . import chat_service
 from . import notification_service
 from . import matching_service
-from . import upload_service 
+from . import upload_service
+from . import file_service
