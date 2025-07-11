@@ -10,7 +10,7 @@ from .token import Token, TokenPayload, TokenWithUser, OnboardingToken
 from .common import UserSimple
 from .space import (
     Space, SpaceTenantResponse, SpaceProfile,
-    SpaceProfileUpdate, SpaceImageSchema, AddUserToSpaceRequest, BasicSpace,
+    SpaceProfileUpdate, SpaceImage, AddUserToSpaceRequest, BasicSpace,
     BrowseableSpace, BrowseableSpaceListResponse, SpaceCreationResponse,
     UserWorkstationInfo, ManagedSpaceDetail, SpaceUpdate,
     SpaceConnectionStatsResponse, StartupTenantInfo, FreelancerTenantInfo,
