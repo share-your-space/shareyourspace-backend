@@ -1,6 +1,6 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
-from datetime import date
+from datetime import date, datetime
 
 class Plan(BaseModel):
     name: str
@@ -16,16 +16,24 @@ class PaymentMethod(BaseModel):
 
 class Invoice(BaseModel):
     id: str
-    date: date
+    date: datetime
     amount: float
-    pdf_url: str
+    status: str
 
 class BillingInfo(BaseModel):
-    current_plan: Plan
-    payment_method: Optional[PaymentMethod]
+    plan: str
+    status: str
+    next_billing_date: datetime
+    payment_method: str
     invoices: List[Invoice]
-    plan_renewal_date: date
-    available_plans: List[Plan]
 
     class Config:
         orm_mode = True
+
+class SubscriptionUpdate(BaseModel):
+    plan: Optional[str] = None
+    status: Optional[str] = None
+
+class BillingSettings(BaseModel):
+    payment_method: str
+    invoice_email: str

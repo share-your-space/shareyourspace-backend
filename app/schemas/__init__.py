@@ -35,6 +35,7 @@ from .admin import (
 )
 from .analytics import AnalyticsOverview
 from .booking import Booking
+from .billing import SubscriptionUpdate, BillingInfo, Invoice
 
 # Resolve forward references
 SpaceProfile.model_rebuild()
