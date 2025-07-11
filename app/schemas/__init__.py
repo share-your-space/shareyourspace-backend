@@ -34,6 +34,7 @@ from .admin import (
     StartupUpdateAdmin, MemberSlotUpdate, WaitlistedUser, WaitlistedStartup
 )
 from .analytics import AnalyticsOverview
+from .billing import BillingInfo, SubscriptionUpdate
 
 # Resolve forward references
 SpaceProfile.model_rebuild()
