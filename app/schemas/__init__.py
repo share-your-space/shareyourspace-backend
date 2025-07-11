@@ -33,6 +33,7 @@ from .admin import (
     AISearchRequest, PendingCorporateUser, UserActivateCorporate,
     StartupUpdateAdmin, MemberSlotUpdate, WaitlistedUser, WaitlistedStartup
 )
+from .analytics import AnalyticsOverview
 
 # Resolve forward references
 SpaceProfile.model_rebuild()
