@@ -14,12 +14,25 @@ from app.schemas.admin import (
 )
 from app.schemas.user import User as UserSchema
 from app.schemas.organization import Startup as StartupSchema
+from app.schemas.dashboard import DashboardStats
 
 router = APIRouter(
     tags=["Corporate Admin"],
     prefix="/corp-admin",
     dependencies=[Depends(require_corp_admin)]
 )
+
+@router.get("/dashboard/stats", response_model=DashboardStats)
+async def get_dashboard_stats(
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Get key statistics for the corporate admin dashboard."""
+    if not current_user.company_id:
+        raise HTTPException(status_code=403, detail="Admin not associated with a company.")
+    
+    stats = await services.corp_admin_service.get_dashboard_stats(db, company_id=current_user.company_id)
+    return stats
 
 @router.get("/spaces", response_model=List[schemas.Space])
 async def get_company_spaces(
@@ -421,4 +434,4 @@ async def delete_space(
     await services.corp_admin_service.delete_space_and_handle_tenants(
         db=db, space_id=space_id, current_user=current_user
     )
-    return None 
+    return None

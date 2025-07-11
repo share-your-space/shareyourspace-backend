@@ -1,16 +1,72 @@
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func, and_
 from typing import List, Optional, Union
 import re
 from sqlalchemy.orm import selectinload
 import logging
 
 from app import crud, models, schemas
-from app.models.enums import UserRole, UserStatus, NotificationType, InterestStatus
+from app.models.enums import UserRole, UserStatus, NotificationType, InterestStatus, InvitationStatus
 from app.schemas.admin import StartupUpdateAdmin, MemberSlotUpdate, AddTenantRequest
+from app.schemas.dashboard import DashboardStats
 
 logger = logging.getLogger(__name__)
+
+async def get_dashboard_stats(db: AsyncSession, *, company_id: int) -> DashboardStats:
+    """
+    Gathers key statistics for the corporate admin dashboard.
+    """
+    # Total spaces for the company
+    spaces_query = select(func.count(models.SpaceNode.id)).where(models.SpaceNode.company_id == company_id)
+    total_spaces = await db.scalar(spaces_query)
+
+    # Get all space IDs for the company to use in subsequent queries
+    space_ids_query = select(models.SpaceNode.id).where(models.SpaceNode.company_id == company_id)
+    space_ids = (await db.execute(space_ids_query)).scalars().all()
+
+    total_workstations = 0
+    occupied_workstations = 0
+    if space_ids:
+        # Total workstations in all spaces
+        workstations_query = select(func.count(models.Workstation.id)).where(models.Workstation.space_id.in_(space_ids))
+        total_workstations = await db.scalar(workstations_query)
+
+        # Occupied workstations
+        occupied_query = select(func.count(models.Workstation.id)).where(
+            models.Workstation.space_id.in_(space_ids),
+            models.Workstation.status == 'OCCUPIED'
+        )
+        occupied_workstations = await db.scalar(occupied_query)
+
+    # Total tenants (freelancers + startups)
+    freelancers_query = select(func.count(models.User.id)).where(
+        models.User.space_id.in_(space_ids),
+        models.User.role == UserRole.FREELANCER
+    )
+    startups_query = select(func.count(models.organization.Startup.id)).where(
+        models.organization.Startup.space_id.in_(space_ids)
+    )
+    total_freelancers = await db.scalar(freelancers_query)
+    total_startups = await db.scalar(startups_query)
+    total_tenants = total_freelancers + total_startups
+
+    # Pending invites sent by any admin of this company
+    pending_invites_query = select(func.count(models.Invitation.id)).where(
+        models.Invitation.company_id == company_id,
+        models.Invitation.status == InvitationStatus.PENDING
+    )
+    pending_invites = await db.scalar(pending_invites_query)
+
+    return DashboardStats(
+        total_spaces=total_spaces,
+        total_workstations=total_workstations,
+        occupied_workstations=occupied_workstations,
+        available_workstations=total_workstations - occupied_workstations,
+        total_tenants=total_tenants,
+        pending_invites=pending_invites,
+    )
+
 
 async def add_tenant_to_space(
     db: AsyncSession,
@@ -363,4 +419,4 @@ async def delete_space_and_handle_tenants(db: AsyncSession, *, space_id: int, cu
 
     # 9. Delete the space itself
     await crud.crud_space.space.remove(db=db, id=space.id)
-    # The CRUD remove method handles the commit 
+    # The CRUD remove method handles the commit
