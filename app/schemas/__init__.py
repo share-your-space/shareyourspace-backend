@@ -12,7 +12,7 @@ from .space import (
     Space, SpaceTenantResponse, SpaceProfile,
     SpaceProfileUpdate, SpaceImageSchema, AddUserToSpaceRequest, BasicSpace,
     BrowseableSpace, BrowseableSpaceListResponse, SpaceCreationResponse,
-    UserWorkstationInfo, ManagedSpaceDetail,
+    UserWorkstationInfo, ManagedSpaceDetail, SpaceUpdate,
     SpaceConnectionStatsResponse, StartupTenantInfo, FreelancerTenantInfo,
     TenantInfo, SpaceCreationUserResponse, WorkstationTenantInfo,
     WorkstationStatus, WorkstationAssignmentRequest, WorkstationAssignmentResponse,

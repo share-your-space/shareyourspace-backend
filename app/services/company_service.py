@@ -5,6 +5,35 @@ from typing import Optional
 from app import crud, models, schemas
 from app.services import file_service
 
+async def get_company_by_id(db: AsyncSession, company_id: int) -> Optional[models.Company]:
+    """
+    Get a company by its ID.
+    """
+    return await crud.crud_company.get(db, id=company_id)
+
+async def update_company(
+    db: AsyncSession,
+    company_id: int,
+    company_update: schemas.CompanyUpdate
+) -> models.Company:
+    """
+    Update a company's details.
+    """
+    company = await get_company_by_id(db, company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+    
+    return await crud.crud_company.update(db, db_obj=company, obj_in=company_update)
+
+async def get_browse_waitlist(db: AsyncSession, company_id: int):
+    """
+    Get the list of users and startups who are on the waitlist to be browsed by a specific company.
+    """
+    # This is a placeholder for the actual logic.
+    # You would need to query a table that stores waitlist information.
+    # For now, returning an empty list.
+    return []
+
 async def get_company_details(db: AsyncSession, company_id: int) -> models.Company:
     """
     Retrieves company details.
