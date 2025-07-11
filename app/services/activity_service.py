@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from typing import List, Tuple
-from app.models import Booking, User, Space, Company, Invitation
+from app.models import Booking, User, SpaceNode as Space, Company, Invitation
 from app.schemas.activity import Activity
 from datetime import datetime, timedelta
 
