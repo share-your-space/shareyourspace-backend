@@ -8,3 +8,4 @@ class DashboardStats(BaseModel):
     available_workstations: int
     total_tenants: int
     pending_invites: int
+    active_bookings: int

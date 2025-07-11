@@ -59,6 +59,15 @@ async def get_spaces(db: AsyncSession, skip: int = 0, limit: int = 100) -> List[
     result = await db.execute(stmt)
     return result.scalars().all()
 
+async def get_by_company_id(db: AsyncSession, company_id: int) -> List[SpaceNode]:
+    """Fetch all spaces for a given company ID."""
+    result = await db.execute(
+        select(SpaceNode)
+        .options(selectinload(SpaceNode.images))
+        .filter(SpaceNode.company_id == company_id)
+    )
+    return result.scalars().all()
+
 async def get_space_by_corporate_admin_id(db: AsyncSession, admin_id: int) -> Optional[SpaceNode]:
     logger.debug(f"Fetching space managed by admin ID: {admin_id}")
     result = await db.execute(select(SpaceNode).filter(SpaceNode.corporate_admin_id == admin_id))
@@ -659,14 +668,6 @@ async def terminate_workstation_assignments_for_user_ids(db: AsyncSession, *, us
     await db.execute(stmt)
     await db.commit() 
 
-async def get_by_company_id(db: AsyncSession, *, company_id: int) -> List[models.SpaceNode]:
-    """Gets all spaces associated with a specific company."""
-    if not company_id:
-        return []
-    stmt = select(models.SpaceNode).where(models.SpaceNode.company_id == company_id)
-    result = await db.execute(stmt)
-    return result.scalars().all()
-
 async def get_space_with_images(db: AsyncSession, *, space_id: int) -> Optional[SpaceNode]:
     stmt = select(SpaceNode).where(SpaceNode.id == space_id).options(selectinload(SpaceNode.images))
     result = await db.execute(stmt)
@@ -730,67 +731,20 @@ async def terminate_all_workstation_assignments_in_space(db: AsyncSession, *, sp
 
 class CRUDSpace(CRUDBase[SpaceNode, SpaceCreate, SpaceUpdate]):
     async def get_space_with_images(self, db: AsyncSession, *, space_id: int) -> Optional[SpaceNode]:
-        stmt = (
-            select(SpaceNode)
-            .where(SpaceNode.id == space_id)
-            .options(selectinload(SpaceNode.images), joinedload(SpaceNode.company))
-        )
-        result = await db.execute(stmt)
-        return result.scalars().first()
-
-    async def get_by_company_id(self, db: AsyncSession, *, company_id: int) -> List[SpaceNode]:
-        """Gets all spaces associated with a specific company."""
-        result = await db.execute(
-            select(self.model).where(self.model.company_id == company_id)
-        )
-        return result.scalars().all()
-
-    async def get_space_by_id(self, db: AsyncSession, space_id: int) -> Optional[SpaceNode]:
-        """
-        Fetches a single space by its ID with related company and admin details.
-        """
         result = await db.execute(
             select(SpaceNode)
-            .where(SpaceNode.id == space_id)
-            .options(
-                selectinload(SpaceNode.company).selectinload(Company.direct_employees),
-            )
+            .options(selectinload(SpaceNode.images))
+            .filter(SpaceNode.id == space_id)
         )
         return result.scalars().first()
 
-    async def get_workstations_in_space(self, db: AsyncSession, *, space_id: int, search: Optional[str] = None) -> List[Workstation]:
-        """
-        Fetches all workstations within a specific space.
-        """
-        stmt = (
-            select(Workstation)
-            .where(Workstation.space_id == space_id)
-            .options(selectinload(Workstation.active_assignment).selectinload(models.WorkstationAssignment.user))
+    async def get_by_company_id(self, db: AsyncSession, company_id: int) -> List[SpaceNode]:
+        """Fetch all spaces for a given company ID, including their images."""
+        result = await db.execute(
+            select(self.model)
+            .options(selectinload(self.model.images))
+            .filter(self.model.company_id == company_id)
         )
-        if search:
-            stmt = stmt.where(Workstation.name.ilike(f"%{search}%"))
-
-        # The sorting (natural vs alphabetic) is handled in the service layer
-        # as it's complex to implement natural sort purely in SQL across all DBs.
-        # However, a simple preliminary sort can be useful.
-        stmt = stmt.order_by(Workstation.name)
-
-        result = await db.execute(stmt)
         return result.scalars().all()
 
-    async def update_workstation_status(self, db: AsyncSession, *, space_id: int, workstation_id: int, new_status: WorkstationStatus) -> Optional[Workstation]:
-        """
-        Updates the status of a specific workstation.
-        """
-        workstation = await db.get(Workstation, workstation_id)
-        if workstation and workstation.space_id == space_id:
-            workstation.status = new_status
-            db.add(workstation)
-            await db.commit()
-            await db.refresh(workstation)
-            return workstation
-        return None
-    
-    # Add other space-specific CRUD methods here...
-
-space = CRUDSpace(SpaceNode) 
+space = CRUDSpace(SpaceNode)

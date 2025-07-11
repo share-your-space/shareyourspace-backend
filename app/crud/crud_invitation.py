@@ -177,4 +177,17 @@ class CRUDInvitation(CRUDBase[Invitation, InvitationCreate, InvitationUpdate]):
         await db.execute(stmt)
         await db.commit()
 
-invitation = CRUDInvitation(Invitation) 
+    async def get_by_company_id(self, db: AsyncSession, *, company_id: int) -> List[Invitation]:
+        """
+        Retrieves all invitations associated with a specific company,
+        ordered by creation date.
+        """
+        stmt = (
+            select(self.model)
+            .where(self.model.company_id == company_id)
+            .order_by(self.model.created_at.desc())
+        )
+        result = await db.execute(stmt)
+        return result.scalars().all()
+
+invitation = CRUDInvitation(Invitation)

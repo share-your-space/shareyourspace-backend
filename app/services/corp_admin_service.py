@@ -27,6 +27,7 @@ async def get_dashboard_stats(db: AsyncSession, *, company_id: int) -> Dashboard
 
     total_workstations = 0
     occupied_workstations = 0
+    active_bookings = 0
     if space_ids:
         # Total workstations in all spaces
         workstations_query = select(func.count(models.Workstation.id)).where(models.Workstation.space_id.in_(space_ids))
@@ -38,6 +39,16 @@ async def get_dashboard_stats(db: AsyncSession, *, company_id: int) -> Dashboard
             models.Workstation.status == 'OCCUPIED'
         )
         occupied_workstations = await db.scalar(occupied_query)
+
+        # Active bookings
+        active_bookings_query = select(func.count(models.Booking.id)).where(
+            models.Booking.workstation_id.in_(
+                select(models.Workstation.id).where(models.Workstation.space_id.in_(space_ids))
+            ),
+            models.Booking.end_date >= func.now(),
+            models.Booking.status == 'CONFIRMED'
+        )
+        active_bookings = await db.scalar(active_bookings_query)
 
     # Total tenants (freelancers + startups)
     freelancers_query = select(func.count(models.User.id)).where(
@@ -65,7 +76,79 @@ async def get_dashboard_stats(db: AsyncSession, *, company_id: int) -> Dashboard
         available_workstations=total_workstations - occupied_workstations,
         total_tenants=total_tenants,
         pending_invites=pending_invites,
+        active_bookings=active_bookings,
     )
+
+
+async def get_all_company_workstations(db: AsyncSession, *, company_id: int) -> List[models.Workstation]:
+    """
+    Retrieves all workstations across all spaces for a given company.
+    """
+    # Get all space IDs for the company
+    space_ids_query = select(models.SpaceNode.id).where(models.SpaceNode.company_id == company_id)
+    space_ids_result = await db.execute(space_ids_query)
+    space_ids = space_ids_result.scalars().all()
+
+    if not space_ids:
+        return []
+
+    # Get all workstations in those spaces
+    workstations_query = (
+        select(models.Workstation)
+        .options(
+            selectinload(models.Workstation.space),
+            selectinload(models.Workstation.current_booking).options(
+                selectinload(models.Booking.user)
+            )
+        )
+        .where(models.Workstation.space_id.in_(space_ids))
+        .order_by(models.Workstation.name)
+    )
+    workstations_result = await db.execute(workstations_query)
+    workstations = workstations_result.scalars().unique().all()
+
+    return workstations
+
+
+async def get_all_company_tenants(db: AsyncSession, *, company_id: int) -> List[Union[models.User, models.organization.Startup]]:
+    """
+    Retrieves all tenants (freelancers and startups) across all spaces for a given company.
+    """
+    # Get all space IDs for the company
+    space_ids_query = select(models.SpaceNode.id).where(models.SpaceNode.company_id == company_id)
+    space_ids_result = await db.execute(space_ids_query)
+    space_ids = space_ids_result.scalars().all()
+
+    if not space_ids:
+        return []
+
+    # Get all freelancers in those spaces
+    freelancers_query = (
+        select(models.User)
+        .options(selectinload(models.User.profile))
+        .where(
+            models.User.space_id.in_(space_ids),
+            models.User.role == UserRole.FREELANCER
+        )
+    )
+    freelancers_result = await db.execute(freelancers_query)
+    freelancers = freelancers_result.scalars().unique().all()
+
+    # Get all startups in those spaces
+    startups_query = (
+        select(models.organization.Startup)
+        .options(
+            selectinload(models.organization.Startup.profile),
+            selectinload(models.organization.Startup.direct_members).options(
+                selectinload(models.User.profile)
+            )
+        )
+        .where(models.organization.Startup.space_id.in_(space_ids))
+    )
+    startups_result = await db.execute(startups_query)
+    startups = startups_result.scalars().unique().all()
+
+    return freelancers + startups
 
 
 async def add_tenant_to_space(
@@ -420,3 +503,25 @@ async def delete_space_and_handle_tenants(db: AsyncSession, *, space_id: int, cu
     # 9. Delete the space itself
     await crud.crud_space.space.remove(db=db, id=space.id)
     # The CRUD remove method handles the commit
+
+from app.crud.crud_booking import crud_booking
+
+async def get_all_company_bookings(db: AsyncSession, *, company_id: int) -> List[models.WorkstationAssignment]:
+    """
+    Retrieves all bookings across all spaces for a given company.
+    """
+    bookings = await crud_booking.get_bookings_by_company_id(db, company_id=company_id)
+    return bookings
+
+async def get_all_company_invites(db: AsyncSession, *, company_id: int) -> List[models.Invitation]:
+    """
+    Retrieves all invites sent by any admin of this company.
+    """
+    invites = await crud.crud_invitation.get_by_company_id(db, company_id=company_id)
+    return invites
+
+async def get_company_spaces(db: AsyncSession, *, company_id: int) -> List[models.SpaceNode]:
+    """
+    Retrieves all spaces for a given company.
+    """
+    return await crud.crud_space.space.get_by_company_id(db, company_id=company_id)

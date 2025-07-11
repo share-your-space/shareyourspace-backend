@@ -7,6 +7,7 @@ from sqlalchemy.orm import selectinload
 
 from app import crud, models, schemas, services
 from app.models.enums import UserStatus, UserRole
+from app.models.organization import Company
 from app.schemas.user import UserUpdateInternal
 from app.services import corp_admin_service
 from app.utils.storage import gcs_storage
@@ -68,6 +69,31 @@ async def get_browseable_spaces(db: AsyncSession, *, current_user: models.User) 
 
     return schemas.space.BrowseableSpaceListResponse(spaces=browseable_spaces)
 
+async def get_spaces_by_company_id(db: AsyncSession, company_id: int) -> List[models.SpaceNode]:
+    """Get all spaces for a given company."""
+    return await crud.crud_space.get_by_company_id(db, company_id=company_id)
+
+async def update_space_details(
+    db: AsyncSession,
+    *,
+    space_id: int,
+    space_update: schemas.SpaceUpdate,
+    company_id: int,
+) -> models.SpaceNode:
+    """
+    Update a space's details, ensuring the space belongs to the specified company.
+    """
+    space = await crud.crud_space.get(db, id=space_id)
+    if not space:
+        raise HTTPException(status_code=404, detail="Space not found")
+    if space.company_id != company_id:
+        raise HTTPException(
+            status_code=403, detail="Not authorized to update this space"
+        )
+
+    return await crud.crud_space.update(db, db_obj=space, obj_in=space_update)
+
+
 async def get_space_admins(db: AsyncSession, space_id: int) -> List[models.User]:
     space = await crud.crud_space.get(db, id=space_id, options=[selectinload(models.SpaceNode.company, Company.corporate_admins)])
     if not space or not space.company:
@@ -124,7 +150,3 @@ async def delete_image_from_space(
         
     gcs_storage.delete_blob(blob_name=image.image_url)
     await crud.crud_space.delete_space_image(db, image_id=image_id)
-
-async def get_spaces_by_company_id(db: AsyncSession, *, company_id: int) -> List[models.SpaceNode]:
-    """Gets all spaces for a given company."""
-    return await crud.crud_space.get_by_company_id(db, company_id=company_id) 

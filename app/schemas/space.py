@@ -10,6 +10,14 @@ if TYPE_CHECKING:
     from .user import User, BasicUser
 from .organization import Startup, BasicStartup, Company
 
+class SpaceImage(BaseModel):
+    id: int
+    image_url: HttpUrl
+
+    model_config = ConfigDict(
+        from_attributes=True
+    )
+
 class Space(BaseModel):
     id: int
     name: str
@@ -17,17 +25,24 @@ class Space(BaseModel):
     company_id: Optional[int] = None
     total_workstations: int = 0
     headline: Optional[str] = None
-    amenities: Optional[List[str]] = None
+    amenities: Optional[List[str]] = []
     house_rules: Optional[str] = None
     vibe: Optional[str] = None
     opening_hours: Optional[dict] = None
     key_highlights: Optional[List[str]] = None
     neighborhood_description: Optional[str] = None
     description: Optional[str] = None
+    images: Optional[List[SpaceImage]] = []
 
     model_config = ConfigDict(
         from_attributes=True
     )
+
+class SpaceUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    address: Optional[str] = None
+    amenities: Optional[List[str]] = None
 
 # Schemas for app.schemas.user.User, assuming it exists and has relevant fields like id, full_name, email, role
 # This is a simplified placeholder. You'd import your actual User schema.
@@ -273,3 +288,14 @@ class SpaceProfileUpdate(BaseModel):
     opening_hours: Optional[dict] = None
     key_highlights: Optional[List[str]] = None
     neighborhood_description: Optional[str] = None
+
+class BasicCompany(BaseModel):
+    id: int
+    name: str
+    model_config = ConfigDict(from_attributes=True)
+
+class SpaceWithCompany(Space):
+    company: Optional[BasicCompany] = None
+
+class SpaceWithTenants(Space):
+    tenants: List[TenantInfo]
