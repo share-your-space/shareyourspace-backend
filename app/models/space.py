@@ -12,9 +12,11 @@ from app.models.enums import WorkstationStatus
 
 if TYPE_CHECKING:
     from .user import User
-    from .organization import Company, Startup
+    from .organization import Company
+    from .booking import Booking
     from .invitation import Invitation
     from .interest import Interest
+
 
 class SpaceNode(Base):
     __tablename__ = 'spacenodes'
@@ -36,7 +38,6 @@ class SpaceNode(Base):
 
     company: Mapped[Optional["Company"]] = relationship(back_populates="spaces")
     users: Mapped[List["User"]] = relationship("User", foreign_keys="[User.space_id]", back_populates="space")
-    startups: Mapped[List["Startup"]] = relationship(back_populates="space")
     workstations: Mapped[List["Workstation"]] = relationship(back_populates="space", cascade="all, delete-orphan")
     images: Mapped[List["SpaceImage"]] = relationship(back_populates="space", cascade="all, delete-orphan")
     invitations: Mapped[List["Invitation"]] = relationship(back_populates="space")
@@ -70,6 +71,7 @@ class Workstation(Base):
     
     space: Mapped["SpaceNode"] = relationship(back_populates="workstations")
     assignments: Mapped[List["WorkstationAssignment"]] = relationship(back_populates="workstation", cascade="all, delete-orphan")
+    bookings: Mapped[List["Booking"]] = relationship(back_populates="workstation", cascade="all, delete-orphan")
     active_assignment: Mapped[Optional["WorkstationAssignment"]] = relationship(
         "WorkstationAssignment",
         primaryjoin=lambda: and_(
@@ -98,4 +100,4 @@ class WorkstationAssignment(Base):
     space: Mapped["SpaceNode"] = relationship("SpaceNode", back_populates="assignments")
 
     def __repr__(self) -> str:
-        return f"<WorkstationAssignment(id={self.id}, user_id={self.user_id}, workstation_id={self.workstation_id})>" 
+        return f"<WorkstationAssignment(id={self.id}, user_id={self.user_id}, workstation_id={self.workstation_id})>"
