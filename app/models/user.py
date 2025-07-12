@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from .verification_token import VerificationToken
     from .password_reset_token import PasswordResetToken
     from .profile import UserProfile
+    from .booking import Booking
 
 from app.db.base_class import Base
 from .enums import UserRole, UserStatus
@@ -60,6 +61,7 @@ class User(Base):
     referral_received = relationship("Referral", foreign_keys="app.models.referral.Referral.referred_user_id", back_populates="referred_user", uselist=False, cascade="all, delete-orphan")
     notifications = relationship("Notification", foreign_keys="app.models.notification.Notification.user_id", back_populates="user", cascade="all, delete-orphan")
     interests = relationship("Interest", back_populates="user", cascade="all, delete-orphan")
+    bookings = relationship("Booking", back_populates="user", cascade="all, delete-orphan")
 
     def __repr__(self):
-        return f"<User(id={self.id}, email='{self.email}')>" 
+        return f"<User(id={self.id}, email='{self.email}')>"

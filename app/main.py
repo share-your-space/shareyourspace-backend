@@ -32,7 +32,7 @@ if settings.ALLOWED_ORIGINS:
 # Include all routers to the FastAPI app instance
 fastapi_app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
 fastapi_app.include_router(sys_admin.router, prefix="/api/v1", tags=["System Admin"])
-fastapi_app.include_router(corp_admin.router, prefix="/api/v1/company", tags=["Corporate Admin"])
+fastapi_app.include_router(corp_admin.router, prefix="/api/v1", tags=["Corporate Admin"])
 fastapi_app.include_router(users.router, prefix="/api/v1/users", tags=["users"])
 fastapi_app.include_router(spaces.router, prefix="/api/v1/spaces", tags=["spaces"])
 fastapi_app.include_router(workstations.router, prefix="/api/v1/workstations", tags=["workstations"])
